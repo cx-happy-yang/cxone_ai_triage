@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+dist_renamed/
+*.spec
+triage_results.json
+triage_results.csv
+.env

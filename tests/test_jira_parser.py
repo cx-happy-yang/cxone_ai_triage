@@ -1,0 +1,95 @@
+import unittest
+
+from cxone_ai_triage.github_event import load_jira_issue
+from cxone_ai_triage.jira_parser import parse_jira_issue
+
+SAST_DESCRIPTION = (
+    r"*Checkmarx \(SAST\):* SQL_Injection" "\n"
+    r"*Security Issue:*  [Read More |https://sng.ast.checkmarx.net/results/"
+    r"1b49ad6f-057f-400c-aa32-f6bc31caf242/d01d7561-2bf5-48b2-bbaa-da166c671fc3"
+    r"/sast/description/89/2621223299958738513] about SQL_Injection" "\n"
+    r"*Checkmarx Project:* [JavaVulnerableLab|https://sng.ast.checkmarx.net/"
+    r"projects/1b49ad6f-057f-400c-aa32-f6bc31caf242/overview?branch=master]" "\n"
+    r"*Branch:* master" "\n"
+    r"*Scan ID:* [d01d7561\-2bf5\-48b2\-bbaa\-da166c671fc3|https://sng.ast."
+    r"checkmarx.net/projects/1b49ad6f-057f-400c-aa32-f6bc31caf242/scans?"
+    r"id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&branch=master]" "\n\n----\n"
+    r"*Result 1:*" "\n*Severity:* CRITICAL" "\n*State:* CONFIRMED" "\n"
+    r"*Status:* RECURRENT" "\n"
+    r"Review result in Checkmarx One: [SQL\_Injection|https://sng.ast."
+    r"checkmarx.net/results/d01d7561-2bf5-48b2-bbaa-da166c671fc3/"
+    r"1b49ad6f-057f-400c-aa32-f6bc31caf242/sast?"
+    r"result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D]" "\n."
+)
+
+
+class TestParseJiraIssue(unittest.TestCase):
+    def test_real_sast_ticket(self):
+        jobs = parse_jira_issue({"key": "JVL-2", "description": SAST_DESCRIPTION})
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job.ticket_key, "JVL-2")
+        self.assertEqual(job.scanner_type, "sast")
+        self.assertEqual(job.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+        self.assertEqual(job.result_hash, "XZBiE9xWT5WiRxxnpMKmKfZUJuA=")
+        self.assertIsNone(job.cve_id)
+
+    def test_sca_ticket_cve_extraction(self):
+        description = (
+            r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependency" "\n"
+            r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]" "\n"
+            "Package log4j-core is affected by CVE-2021-44228."
+        )
+        jobs = parse_jira_issue({"key": "PRUD-9", "description": description})
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job.scanner_type, "sca")
+        self.assertEqual(job.scan_id, "22222222-2222-2222-2222-222222222222")
+        self.assertEqual(job.cve_id, "CVE-2021-44228")
+
+    def test_missing_scanner_type_raises(self):
+        with self.assertRaises(ValueError):
+            parse_jira_issue({"key": "X-1", "description": "no scanner marker here"})
+
+    def test_missing_scan_id_raises(self):
+        description = r"*Checkmarx \(SAST\):* Foo" "\nno scan id link here"
+        with self.assertRaises(ValueError):
+            parse_jira_issue({"key": "X-1", "description": description})
+
+    def test_load_jira_issue_from_sample_event_file(self):
+        issue = load_jira_issue("samples/github_event.sample.json")
+        self.assertEqual(issue["key"], "JVL-2")
+        jobs = parse_jira_issue(issue)
+        self.assertEqual(jobs[0].scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+
+    def test_jira_meta_is_carried_through_without_affecting_resolution(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-2",
+                "description": SAST_DESCRIPTION,
+                "status": "To Do",
+                "priority": "Highest",
+                "issue_type": "Bug",
+                "project": "JVL",
+                "reporter": "security-bot@example.com",
+                "assignee": "dev-owner@example.com",
+                "labels": ["checkmarx", "sast"],
+                "created": "2026-08-20T09:15:00.000-0000",
+                "updated": "2026-08-27T14:02:00.000-0000",
+                "url": "",  # empty/falsy fields should be dropped, not stored as ""
+            }
+        )
+        job = jobs[0]
+        self.assertEqual(job.jira_meta["status"], "To Do")
+        self.assertEqual(job.jira_meta["priority"], "Highest")
+        self.assertEqual(job.jira_meta["reporter"], "security-bot@example.com")
+        self.assertEqual(job.jira_meta["labels"], ["checkmarx", "sast"])
+        self.assertNotIn("url", job.jira_meta)  # not in _META_FIELDS
+        self.assertNotIn("description", job.jira_meta)  # too large / not useful in a report
+
+        row = job  # sanity: jira_meta doesn't leak into identifier-resolution fields
+        self.assertEqual(row.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+
+
+if __name__ == "__main__":
+    unittest.main()

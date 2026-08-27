@@ -1,0 +1,47 @@
+name: Build cxone-ai-triage binary
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: cxone-ai-triage-linux-x64
+          - os: windows-latest
+            asset_name: cxone-ai-triage-windows-x64.exe
+          - os: macos-latest
+            asset_name: cxone-ai-triage-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build binary
+        run: pyinstaller --onefile --name cxone-ai-triage main.py
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mkdir -p dist_renamed
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp dist/cxone-ai-triage.exe "dist_renamed/${{ matrix.asset_name }}"
+          else
+            cp dist/cxone-ai-triage "dist_renamed/${{ matrix.asset_name }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist_renamed/${{ matrix.asset_name }}

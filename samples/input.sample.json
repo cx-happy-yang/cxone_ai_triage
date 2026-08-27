@@ -1,0 +1,21 @@
+[
+  {
+    "ticket_key": "PRUD-1234",
+    "scan_id": "11111111-1111-1111-1111-111111111111",
+    "scanner_type": "sast",
+    "result_hash": "9f4b7c2e5a1d0e3f6b8c1a2d4e5f6a7b"
+  },
+  {
+    "ticket_key": "PRUD-1235",
+    "scan_id": "11111111-1111-1111-1111-111111111111",
+    "scanner_type": "sca",
+    "cve_id": "CVE-2021-44228"
+  },
+  {
+    "ticket_key": "PRUD-1236",
+    "scan_id": "11111111-1111-1111-1111-111111111111",
+    "scanner_type": "sca",
+    "cve_id": "CVE-2021-44228",
+    "package_identifier": "log4j-core-2.14.1"
+  }
+]
