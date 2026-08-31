@@ -17,14 +17,26 @@ Verified against a real SAST ticket description:
     ...
     Review result in Checkmarx One: [SQL\\_Injection|https://.../results/d01d7561-2bf5-48b2-bbaa-da166c671fc3/1b49ad6f-057f-400c-aa32-f6bc31caf242/sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D]
 
-The SCA extraction path (CVE-ID regex) is not yet verified against a real
-SCA ticket sample — treat it as provisional until confirmed.
+For SCA, Prudential's Jira tickets carry each CVE on a *subtask* (summary
+line, e.g. "CVE-2021-44228 - log4j-core-2.14.1"), not in the parent ticket's
+description, while the Scan ID/scanner-type marker stay on the parent
+description exactly like SAST. The parent's `subtasks` field is expected to
+be an array as produced by Jira Automation's `{{issue.subtasks.jsonEncode}}`
+smart value — i.e. each item shaped like the Jira REST API's issue-link
+object (`{"key": ..., "fields": {"summary": ...}}`). This exact field name
+and nesting is NOT yet verified against a real payload — treat it as
+provisional until confirmed. A ticket with no `subtasks` field falls back to
+scanning the parent description directly for a CVE ID (the original,
+also-unverified approach), so this only breaks if both shapes turn out wrong.
 """
+import logging
 import re
 from typing import List, Optional
 from urllib.parse import unquote
 
 from .models import TriageJob
+
+logger = logging.getLogger("cxone_ai_triage")
 
 # Jira wiki markup escapes characters like "(", ")", "-", "_" with a leading
 # backslash in plain text (not inside link targets) to stop Jira's smart
@@ -67,7 +79,7 @@ def parse_jira_issue(jira_issue: dict) -> List[TriageJob]:
     if scanner_type == "sast":
         return _parse_sast(ticket_key, scan_id, description, jira_meta)
     if scanner_type == "sca":
-        return _parse_sca(ticket_key, scan_id, description, jira_meta)
+        return _parse_sca(ticket_key, scan_id, description, jira_meta, jira_issue.get("subtasks"))
     raise ValueError(f"{ticket_key}: unsupported scanner type {scanner_type!r} for AI Triage")
 
 
@@ -103,11 +115,67 @@ def _parse_sast(
 
 
 def _parse_sca(
+    ticket_key: Optional[str],
+    scan_id: str,
+    description: str,
+    jira_meta: dict,
+    subtasks: Optional[list],
+) -> List[TriageJob]:
+    if subtasks:
+        return _parse_sca_subtasks(ticket_key, scan_id, jira_meta, subtasks)
+    return _parse_sca_description_fallback(ticket_key, scan_id, description, jira_meta)
+
+
+def _parse_sca_subtasks(
+    ticket_key: Optional[str], scan_id: str, jira_meta: dict, subtasks: list
+) -> List[TriageJob]:
+    jobs = []
+    for subtask in subtasks:
+        if not isinstance(subtask, dict):
+            continue
+        # Jira Automation's {{issue.subtasks.jsonEncode}} yields the REST API's
+        # issue-link shape ({"key": ..., "fields": {"summary": ...}}); fall
+        # back to a flat "summary" key in case a different smart value was used.
+        fields = subtask.get("fields") if isinstance(subtask.get("fields"), dict) else subtask
+        summary = fields.get("summary") or ""
+        subtask_key = subtask.get("key")
+
+        cve_match = _CVE_RE.search(summary)
+        if not cve_match:
+            logger.warning(
+                "%s: subtask %s has no CVE ID in its summary (%r); skipping",
+                ticket_key, subtask_key, summary,
+            )
+            continue
+
+        meta = dict(jira_meta)
+        meta["parent_key"] = ticket_key
+        meta["subtask_summary"] = summary
+        jobs.append(
+            TriageJob(
+                scan_id=scan_id,
+                scanner_type="sca",
+                ticket_key=subtask_key or ticket_key,
+                cve_id=cve_match.group(0).upper(),
+                jira_meta=meta,
+            )
+        )
+
+    if not jobs:
+        raise ValueError(
+            f"{ticket_key}: has subtasks but none of their summaries contain a CVE ID"
+        )
+    return jobs
+
+
+def _parse_sca_description_fallback(
     ticket_key: Optional[str], scan_id: str, description: str, jira_meta: dict
 ) -> List[TriageJob]:
     cve_ids = list(dict.fromkeys(m.upper() for m in _CVE_RE.findall(description)))
     if not cve_ids:
-        raise ValueError(f"{ticket_key}: found no CVE ID in the ticket description")
+        raise ValueError(
+            f"{ticket_key}: no subtasks and no CVE ID in the ticket description"
+        )
     return [
         TriageJob(
             scan_id=scan_id, scanner_type="sca", ticket_key=ticket_key, cve_id=cve,

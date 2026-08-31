@@ -34,7 +34,7 @@ class TestParseJiraIssue(unittest.TestCase):
         self.assertEqual(job.result_hash, "XZBiE9xWT5WiRxxnpMKmKfZUJuA=")
         self.assertIsNone(job.cve_id)
 
-    def test_sca_ticket_cve_extraction(self):
+    def test_sca_ticket_without_subtasks_falls_back_to_description_cve(self):
         description = (
             r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependency" "\n"
             r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]" "\n"
@@ -46,6 +46,66 @@ class TestParseJiraIssue(unittest.TestCase):
         self.assertEqual(job.scanner_type, "sca")
         self.assertEqual(job.scan_id, "22222222-2222-2222-2222-222222222222")
         self.assertEqual(job.cve_id, "CVE-2021-44228")
+
+    def test_sca_ticket_with_subtasks_yields_one_job_per_cve(self):
+        description = (
+            r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies" "\n"
+            r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]"
+        )
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": description,
+                "subtasks": [
+                    {"key": "JVL-11", "fields": {"summary": "CVE-2021-44228 - log4j-core-2.14.1"}},
+                    {"key": "JVL-12", "fields": {"summary": "CVE-2022-23305 - log4j-core-2.14.1"}},
+                ],
+            }
+        )
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({j.ticket_key for j in jobs}, {"JVL-11", "JVL-12"})
+        self.assertEqual({j.cve_id for j in jobs}, {"CVE-2021-44228", "CVE-2022-23305"})
+        for j in jobs:
+            self.assertEqual(j.scan_id, "22222222-2222-2222-2222-222222222222")
+            self.assertEqual(j.jira_meta["parent_key"], "JVL-10")
+
+    def test_sca_subtask_without_cve_is_skipped_not_fatal(self):
+        description = (
+            r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies" "\n"
+            r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]"
+        )
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": description,
+                "subtasks": [
+                    {"key": "JVL-11", "fields": {"summary": "CVE-2021-44228 - log4j-core-2.14.1"}},
+                    {"key": "JVL-13", "fields": {"summary": "Investigate false positive"}},
+                ],
+            }
+        )
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].ticket_key, "JVL-11")
+
+    def test_sca_ticket_all_subtasks_without_cve_raises(self):
+        description = (
+            r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies" "\n"
+            r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]"
+        )
+        with self.assertRaises(ValueError):
+            parse_jira_issue(
+                {
+                    "key": "JVL-10",
+                    "description": description,
+                    "subtasks": [{"key": "JVL-13", "fields": {"summary": "Investigate false positive"}}],
+                }
+            )
+
+    def test_load_sca_sample_event_with_subtasks(self):
+        issue = load_jira_issue("samples/github_event_sca.sample.json")
+        jobs = parse_jira_issue(issue)
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({j.cve_id for j in jobs}, {"CVE-2021-44228", "CVE-2022-23305"})
 
     def test_missing_scanner_type_raises(self):
         with self.assertRaises(ValueError):

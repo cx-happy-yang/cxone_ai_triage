@@ -22,12 +22,24 @@ Review result in Checkmarx One: [SQL\_Injection|https://.../results/d01d7561-2bf
 ```
 
 `cxone_ai_triage/jira_parser.py` regex-extracts, per ticket: the scanner
-type (`Checkmarx (SAST)` / `Checkmarx (SCA)` marker), the scan ID (the
+type (`Checkmarx (SAST)` / `Checkmarx (SCA)` marker) and the scan ID (the
 `scans?id=` link, chosen because it's unambiguous — the two `/results/<a>/<b>/sast`
 style links elsewhere in the template don't put scan ID and project ID in a
-consistent order), and either the SAST `result-id=` value (URL-decoded) or a
-CVE ID (SCA — matched by pattern, not yet verified against a real SCA ticket
-sample).
+consistent order).
+
+For SAST, the result identifier is the `result-id=` value on the same
+description (URL-decoded) — one ticket, one result, one triage job.
+
+For SCA, Prudential's tickets carry each CVE on a **subtask**, not in the
+parent ticket's description: subtask summaries look like
+`"CVE-2021-44228 - log4j-core-2.14.1"`. The parent's `subtasks` array
+(expected shape: Jira Automation's `{{issue.subtasks.jsonEncode}}` smart
+value, i.e. `{"key": ..., "fields": {"summary": ...}}` per item) yields one
+triage job per subtask that has a CVE in its summary; subtasks without one
+are skipped with a warning, not fatal. **This exact subtasks field
+name/shape is not yet verified against a real payload** — a ticket with no
+`subtasks` field falls back to scanning the parent description directly for
+a CVE ID instead.
 
 From there, `POST /api/ai-triage/triage` needs more than what the ticket gives us:
 
@@ -114,7 +126,8 @@ python main.py -i samples/input.sample.json -o triage_results.json
 | `package_identifier` | SCA only, optional | disambiguates when the same CVE hits more than one package in the scan |
 
 See `samples/input.sample.json` / `samples/input.sample.csv` /
-`samples/github_event.sample.json`.
+`samples/github_event.sample.json` (SAST) / `samples/github_event_sca.sample.json`
+(SCA, with subtasks).
 
 Output is a JSON/CSV report with the resolved `project_id`, `similarity_id`,
 `alternate_id`, `group_id`, the `triage_id` returned by the trigger call, and
