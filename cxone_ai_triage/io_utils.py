@@ -10,6 +10,9 @@ _OUTCOME_FIELDNAMES = [
     "ticket_key", "scan_id", "scanner_type", "result_hash", "cve_id",
     "project_id", "similarity_id", "alternate_id", "package_identifier",
     "group_id", "triage_id", "status", "error",
+    "ai_triage_status", "reachability_status", "exploitability_status",
+    "attackability_status", "ai_triage_summary", "poll_error",
+    "comment_posted", "comment_error",
 ]
 
 

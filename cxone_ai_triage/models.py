@@ -53,7 +53,14 @@ class TriageJob:
 
 @dataclass
 class TriageOutcome:
-    """Resolved identifiers plus the result of triggering AI Triage for one job."""
+    """Resolved identifiers, the trigger result, and (if polling/commenting
+    were run) the finished AI Triage verdict and Jira comment outcome for
+    one job.
+
+    poll_error / comment_error are best-effort failures on top of an
+    already-successful trigger: they never flip `status` back to "failed"
+    (see pipeline.run_pipeline).
+    """
 
     job: TriageJob
     project_id: Optional[str] = None
@@ -64,6 +71,14 @@ class TriageOutcome:
     triage_id: Optional[str] = None
     status: str = "pending"  # pending | accepted | failed
     error: Optional[str] = None
+    ai_triage_status: Optional[str] = None
+    reachability_status: Optional[str] = None
+    exploitability_status: Optional[str] = None
+    attackability_status: Optional[str] = None
+    ai_triage_summary: Optional[str] = None
+    poll_error: Optional[str] = None
+    comment_posted: bool = False
+    comment_error: Optional[str] = None
 
     def to_row(self) -> dict:
         row = {
@@ -80,6 +95,14 @@ class TriageOutcome:
             "triage_id": self.triage_id,
             "status": self.status,
             "error": self.error,
+            "ai_triage_status": self.ai_triage_status,
+            "reachability_status": self.reachability_status,
+            "exploitability_status": self.exploitability_status,
+            "attackability_status": self.attackability_status,
+            "ai_triage_summary": self.ai_triage_summary,
+            "poll_error": self.poll_error,
+            "comment_posted": self.comment_posted,
+            "comment_error": self.comment_error,
         }
         for key, value in self.job.jira_meta.items():
             row[f"jira_{key}"] = value

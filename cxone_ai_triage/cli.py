@@ -10,15 +10,25 @@ Two ways to feed it Jira ticket data:
    structured rows (see samples/input.sample.json). Useful for testing
    against a known scan_id/result_hash without wiring up a real dispatch.
 
-Authentication is read by CheckmarxPythonSDK from environment variables
-(see README.md), e.g. for an OAuth client (recommended for CI):
+For each job it triggers AI Triage, then (unless --no-poll) polls for the
+finished verdict, then (unless --no-comment) posts it as a comment on the
+originating ticket/subtask — see pipeline.py.
 
+Authentication is read from environment variables (see README.md):
+
+CheckmarxPythonSDK, e.g. for an OAuth client (recommended for CI):
     CXONE_SERVER=https://ast.checkmarx.net
     CXONE_ACCESS_CONTROL_URL=https://iam.checkmarx.net
     CXONE_TENANT_NAME=<tenant>
     CXONE_GRANT_TYPE=client_credentials
     CXONE_CLIENT_ID=<oauth client id>
     CXONE_CLIENT_SECRET=<oauth client secret>
+
+Jira comment posting (optional — omit to resolve/trigger/poll without
+posting anything back to Jira):
+    JIRA_SERVER=https://your-domain.atlassian.net
+    JIRA_EMAIL=<service account email>
+    JIRA_API_TOKEN=<API token>
 """
 import argparse
 import logging
@@ -26,8 +36,10 @@ import sys
 
 from .github_event import load_jira_issue
 from .io_utils import load_jobs, write_outcomes
+from .jira_client import build_jira_client_from_env
 from .jira_parser import parse_jira_issue
-from .resolver import TriageResolver
+from .pipeline import run_pipeline
+from .resolver import DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_POLL_TIMEOUT_SECONDS, TriageResolver
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -35,7 +47,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="cxone-ai-triage",
         description=(
             "Resolve Jira-ticket-derived scan/result identifiers into "
-            "Checkmarx One AI Triage requests and trigger them."
+            "Checkmarx One AI Triage requests, trigger them, poll for the "
+            "result, and post it back as a Jira comment."
         ),
     )
     source = parser.add_mutually_exclusive_group()
@@ -53,6 +66,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o", "--output", default="triage_results.json",
         help="Path to write results to (.json or .csv). Default: triage_results.json",
+    )
+    parser.add_argument(
+        "--no-poll", action="store_true",
+        help="Trigger AI Triage but don't poll for the finished result "
+             "(implies --no-comment, since there's nothing to comment yet).",
+    )
+    parser.add_argument(
+        "--no-comment", action="store_true",
+        help="Poll for the result but don't post it as a Jira comment.",
+    )
+    parser.add_argument(
+        "--poll-timeout", type=int, default=DEFAULT_POLL_TIMEOUT_SECONDS,
+        help=f"Max seconds to wait per job for AI Triage to finish. Default: {DEFAULT_POLL_TIMEOUT_SECONDS}.",
+    )
+    parser.add_argument(
+        "--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL_SECONDS,
+        help=f"Seconds between poll attempts. Default: {DEFAULT_POLL_INTERVAL_SECONDS}.",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",
@@ -88,7 +118,16 @@ def main(argv=None) -> int:
     logger.info("Resolved %d triage job(s)", len(jobs))
 
     resolver = TriageResolver()
-    outcomes = resolver.resolve_and_trigger_all(jobs)
+    jira_client = None if args.no_comment else build_jira_client_from_env()
+    outcomes = run_pipeline(
+        jobs,
+        resolver,
+        jira_client,
+        poll=not args.no_poll,
+        poll_timeout=args.poll_timeout,
+        poll_interval=args.poll_interval,
+        post_comment=not args.no_comment,
+    )
 
     write_outcomes(args.output, outcomes)
     logger.info("Wrote results to %s", args.output)
@@ -100,9 +139,15 @@ def main(argv=None) -> int:
             logger.error("%s: FAILED - %s", label, o.error)
         else:
             logger.info(
-                "%s: %s (triageID=%s, projectId=%s, groupId=%s, alternateId=%s)",
-                label, o.status, o.triage_id, o.project_id, o.group_id, o.alternate_id,
+                "%s: %s (triageID=%s, aiTriageStatus=%s, reachability=%s, "
+                "exploitability=%s, commentPosted=%s)",
+                label, o.status, o.triage_id, o.ai_triage_status,
+                o.reachability_status, o.exploitability_status, o.comment_posted,
             )
+            if o.poll_error:
+                logger.warning("%s: poll error - %s", label, o.poll_error)
+            if o.comment_error:
+                logger.warning("%s: comment error - %s", label, o.comment_error)
 
     if failed:
         logger.error("%d of %d job(s) failed", len(failed), len(outcomes))

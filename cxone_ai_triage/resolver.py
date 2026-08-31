@@ -21,6 +21,7 @@ not for the trigger call itself) is resolved as:
     authoritative value directly.
 """
 import logging
+import time
 from typing import Dict, List, Optional, Tuple
 
 from CheckmarxPythonSDK.CxOne import (
@@ -30,7 +31,7 @@ from CheckmarxPythonSDK.CxOne import (
     ScannersResultsAPI,
     ScansAPI,
 )
-from CheckmarxPythonSDK.CxOne.dto import AiTriageRequest, TriageBucket
+from CheckmarxPythonSDK.CxOne.dto import AiTriageRequest, AiTriageResult, TriageBucket
 
 from .models import TriageJob, TriageOutcome
 
@@ -40,6 +41,12 @@ logger = logging.getLogger("cxone_ai_triage")
 # paged through. Use the largest page size the API allows to minimize
 # round-trips.
 RESULTS_PAGE_SIZE = 500
+
+# AiTriageResult.triageStatus values that mean "still working" per the SDK's
+# AiTriageResult docstring; anything else (including FAILED) is terminal.
+_IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS"}
+DEFAULT_POLL_TIMEOUT_SECONDS = 600
+DEFAULT_POLL_INTERVAL_SECONDS = 15
 
 
 class TriageResolver:
@@ -211,3 +218,31 @@ class TriageResolver:
 
     def resolve_and_trigger_all(self, jobs: List[TriageJob]) -> List[TriageOutcome]:
         return [self.resolve_and_trigger(job) for job in jobs]
+
+    # ---- polling for the finished result ---------------------------------
+
+    def poll_ai_triage_result(
+        self,
+        project_id: str,
+        group_id: str,
+        timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
+        interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS,
+    ) -> AiTriageResult:
+        """Poll GET /api/ai-triage/triage/{projectId}/{groupId} until the
+        analysis leaves NOT_TRIAGED/IN_PROGRESS, or raise TimeoutError.
+
+        The trigger call is async (202 Accepted with no verdict yet), so the
+        reachability/exploitability/summary fields this is used for only
+        exist after this poll succeeds.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+        while (result.triageStatus or "NOT_TRIAGED") in _IN_PROGRESS_TRIAGE_STATUSES:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"AI Triage for project {project_id} group {group_id} did not "
+                    f"finish within {timeout_seconds}s (last status: {result.triageStatus!r})"
+                )
+            time.sleep(interval_seconds)
+            result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+        return result

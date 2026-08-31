@@ -2,9 +2,11 @@
 faked CheckmarxPythonSDK, without hitting a real Checkmarx One tenant.
 """
 import unittest
+from unittest.mock import patch
 
 from CheckmarxPythonSDK.CxOne.dto import (
     AiTriageResponse,
+    AiTriageResult,
     Result,
     Risk,
     RisksMetaData,
@@ -123,6 +125,51 @@ class TestTriageResolver(unittest.TestCase):
         outcome = self.resolver.resolve_and_trigger(job)
         self.assertEqual(outcome.status, "failed")
         self.assertIn("no result", outcome.error)
+
+
+class TestPollAiTriageResult(unittest.TestCase):
+    def setUp(self):
+        self.resolver = FakeSdkResolver()
+
+    def test_returns_immediately_when_already_terminal(self):
+        terminal = AiTriageResult(triageStatus="VULNERABLE")
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = lambda p, g: terminal
+        result = self.resolver.poll_ai_triage_result(PROJECT_ID, "group-1")
+        self.assertIs(result, terminal)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_polls_until_status_leaves_in_progress(self, mock_sleep):
+        responses = iter([
+            AiTriageResult(triageStatus="NOT_TRIAGED"),
+            AiTriageResult(triageStatus="IN_PROGRESS"),
+            AiTriageResult(triageStatus="PROPOSED_NOT_EXPLOITABLE"),
+        ])
+        calls = []
+
+        def fake_retrieve(project_id, group_id):
+            calls.append((project_id, group_id))
+            return next(responses)
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        result = self.resolver.poll_ai_triage_result(
+            PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+        )
+        self.assertEqual(result.triageStatus, "PROPOSED_NOT_EXPLOITABLE")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_raises_timeout_error_if_never_terminal(self, mock_sleep):
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus="IN_PROGRESS")
+        )
+        # time.monotonic() advances by 1s per call; interval matches so the
+        # deadline is exceeded after a couple of iterations without a real sleep.
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            with self.assertRaises(TimeoutError):
+                self.resolver.poll_ai_triage_result(
+                    PROJECT_ID, "group-1", timeout_seconds=2, interval_seconds=1
+                )
 
 
 if __name__ == "__main__":
