@@ -106,6 +106,62 @@ class TestParseJiraIssue(unittest.TestCase):
         jobs = parse_jira_issue(issue)
         self.assertEqual(len(jobs), 2)
         self.assertEqual({j.cve_id for j in jobs}, {"CVE-2021-44228", "CVE-2022-23305"})
+        # scanId field takes precedence over the description regex, and the
+        # subtasks are the real automation's flat shape (no "fields" nesting).
+        for j in jobs:
+            self.assertEqual(j.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+
+    def test_sca_subtasks_flat_shape_from_real_automation_rule(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "subtasks": [
+                    {"key": "JVL-11", "summary": "CVE-2021-44228 - log4j-core-2.14.1",
+                     "status": "To Do", "assignee": "dev@example.com",
+                     "created": "2026-08-20T09:16:00.000-0000", "url": "https://x/browse/JVL-11"},
+                ],
+            }
+        )
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].cve_id, "CVE-2021-44228")
+        self.assertEqual(jobs[0].scan_id, "22222222-2222-2222-2222-222222222222")
+
+    def test_scan_id_field_takes_precedence_over_description(self):
+        # Description points at a different scan id than the scanId field;
+        # the field should win.
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-2",
+                "description": SAST_DESCRIPTION,
+                "scanId": "99999999-9999-9999-9999-999999999999",
+                "VulnerabilityId1": "some-other-hash",
+            }
+        )
+        self.assertEqual(jobs[0].scan_id, "99999999-9999-9999-9999-999999999999")
+
+    def test_vulnerability_id_fields_take_precedence_and_yield_one_job_each(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-2",
+                "description": SAST_DESCRIPTION,  # would otherwise yield a different result_hash
+                "VulnerabilityId1": "hash-one",
+                "VulnerabilityId2": "hash-two",
+                "VulnerabilityId3": "",  # blank fields must be ignored, not treated as a real ID
+                "VulnerabilityId4": "",
+                "VulnerabilityId5": "",
+            }
+        )
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({j.result_hash for j in jobs}, {"hash-one", "hash-two"})
+        for j in jobs:
+            self.assertEqual(j.ticket_key, "JVL-2")  # all jobs stay on the parent ticket
+
+    def test_sast_falls_back_to_description_when_no_vulnerability_id_fields(self):
+        # No VulnerabilityId1..5 at all -> falls back to the description's result-id=.
+        jobs = parse_jira_issue({"key": "JVL-2", "description": SAST_DESCRIPTION})
+        self.assertEqual(jobs[0].result_hash, "XZBiE9xWT5WiRxxnpMKmKfZUJuA=")
 
     def test_missing_scanner_type_raises(self):
         with self.assertRaises(ValueError):

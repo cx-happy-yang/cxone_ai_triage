@@ -15,26 +15,23 @@
       "url": "",
       "created": "2026-08-20T09:15:00.000-0000",
       "updated": "2026-08-27T14:02:00.000-0000",
+      "scanId": "d01d7561-2bf5-48b2-bbaa-da166c671fc3",
       "subtasks": [
         {
-          "id": "10101",
           "key": "JVL-11",
-          "fields": {
-            "summary": "CVE-2021-44228 - log4j-core-2.14.1",
-            "status": {"name": "To Do"},
-            "priority": {"name": "Highest"},
-            "issuetype": {"name": "Sub-task", "subtask": true}
-          }
+          "summary": "CVE-2021-44228 - log4j-core-2.14.1",
+          "status": "To Do",
+          "assignee": "dev-owner@example.com",
+          "created": "2026-08-20T09:16:00.000-0000",
+          "url": "https://sng.ast.checkmarx.net/browse/JVL-11"
         },
         {
-          "id": "10102",
           "key": "JVL-12",
-          "fields": {
-            "summary": "CVE-2022-23305 - log4j-core-2.14.1",
-            "status": {"name": "To Do"},
-            "priority": {"name": "High"},
-            "issuetype": {"name": "Sub-task", "subtask": true}
-          }
+          "summary": "CVE-2022-23305 - log4j-core-2.14.1",
+          "status": "To Do",
+          "assignee": "dev-owner@example.com",
+          "created": "2026-08-20T09:17:00.000-0000",
+          "url": "https://sng.ast.checkmarx.net/browse/JVL-12"
         }
       ]
     }

@@ -9,39 +9,44 @@ the [`jira`](https://pypi.org/project/jira/) package.
 ## Why this exists
 
 Prudential dispatches this tool as a GitHub Actions `repository_dispatch`
-event carrying the raw Jira ticket (`client_payload.jira_issue`: key,
-summary, project, url, description). The scan ID and result identifier
-aren't separate fields — they're embedded in the ticket's free-text
-`description` (Jira wiki markup produced by the Checkmarx Jira
-integration), e.g.:
+event carrying the raw Jira ticket (`client_payload.jira_issue`). The
+Automation rule that builds this payload is documented in
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md); the
+identifiers `cxone_ai_triage/jira_parser.py` needs come from two places,
+checked in this order:
 
-```
-*Checkmarx (SAST):* SQL_Injection
-...
-*Scan ID:* [d01d7561\-2bf5\-48b2\-bbaa\-da166c671fc3|https://.../scans?id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&branch=master]
-...
-Review result in Checkmarx One: [SQL\_Injection|https://.../results/d01d7561-2bf5-48b2-bbaa-da166c671fc3/1b49ad6f-.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D]
-```
+1. **Structured fields on the payload**, when present:
+   - `scanId` — a custom field holding the scan ID directly.
+   - `VulnerabilityId1` .. `VulnerabilityId5` — up to five custom fields,
+     each optionally holding one SAST resultHash/pathSystemId (at least one
+     is populated per ticket); one triage job is created per populated
+     field, all on the parent ticket key.
+   - `subtasks` — for SCA, each CVE lives on a subtask's summary line (e.g.
+     `"CVE-2021-44228 - log4j-core-2.14.1"`), not a VulnerabilityId field.
+     One triage job per subtask that has a CVE in its summary, using the
+     *subtask's own key* (not the parent's) so the AI Triage comment lands
+     on the right subtask; subtasks without a CVE are skipped with a
+     warning, not fatal.
+2. **The ticket's free-text `description`** (Jira wiki markup produced by
+   the Checkmarx Jira integration), used as a fallback whenever the field
+   above is absent — e.g. for tickets predating this automation rule, or a
+   scanId/VulnerabilityId field that wasn't populated:
 
-`cxone_ai_triage/jira_parser.py` regex-extracts, per ticket: the scanner
-type (`Checkmarx (SAST)` / `Checkmarx (SCA)` marker) and the scan ID (the
-`scans?id=` link, chosen because it's unambiguous — the two `/results/<a>/<b>/sast`
-style links elsewhere in the template don't put scan ID and project ID in a
-consistent order).
+   ```
+   *Checkmarx (SAST):* SQL_Injection
+   ...
+   *Scan ID:* [d01d7561\-2bf5\-48b2\-bbaa\-da166c671fc3|https://.../scans?id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&branch=master]
+   ...
+   Review result in Checkmarx One: [SQL\_Injection|https://.../results/d01d7561-2bf5-48b2-bbaa-da166c671fc3/1b49ad6f-.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D]
+   ```
 
-For SAST, the result identifier is the `result-id=` value on the same
-description (URL-decoded) — one ticket, one result, one triage job.
-
-For SCA, Prudential's tickets carry each CVE on a **subtask**, not in the
-parent ticket's description: subtask summaries look like
-`"CVE-2021-44228 - log4j-core-2.14.1"`. The parent's `subtasks` array
-(expected shape: Jira Automation's `{{issue.subtasks.jsonEncode}}` smart
-value, i.e. `{"key": ..., "fields": {"summary": ...}}` per item) yields one
-triage job per subtask that has a CVE in its summary; subtasks without one
-are skipped with a warning, not fatal. **This exact subtasks field
-name/shape is not yet verified against a real payload** — a ticket with no
-`subtasks` field falls back to scanning the parent description directly for
-a CVE ID instead.
+   The scan ID comes from the `scans?id=` link (unambiguous — the
+   `/results/<a>/<b>/sast` links elsewhere in the template don't put scan ID
+   and project ID in a consistent order); the SAST result identifier from
+   the `result-id=` value (URL-decoded); the SCA CVE ID from a bare
+   `CVE-\d{4}-\d+` pattern anywhere in the text. The scanner type
+   (`Checkmarx (SAST)` / `Checkmarx (SCA)` marker) always comes from the
+   description — there's no structured field for it yet.
 
 From there, `POST /api/ai-triage/triage` needs more than what the ticket gives us:
 

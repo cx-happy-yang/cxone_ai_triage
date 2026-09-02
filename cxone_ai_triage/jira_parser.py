@@ -1,33 +1,34 @@
-"""Extract scan/result identifiers out of a Jira ticket's free-text
-description (Jira wiki markup, as produced by the Checkmarx Jira
-integration).
+"""Extract scan/result identifiers out of a Jira ticket, preferring the
+structured fields Prudential's Jira Automation rule now sends directly
+(scanId, VulnerabilityId1..5) over regex-parsing the free-text description
+(Jira wiki markup, as produced by the Checkmarx Jira integration) — see
+docs/jira-automation-setup.md for the automation rule itself.
 
-The Jira Automation "send web request" action that dispatches this ticket
-posts client_payload.jira_issue with: key, summary, description, status,
-priority, issue_type, project, reporter, assignee, labels, url, created,
-updated. Only `key` and `description` are used to resolve identifiers; the
-rest are carried straight through as jira_meta for traceability in the
-output report (see TriageJob.jira_meta).
+The Jira Automation "send web request" action posts client_payload.jira_issue
+with: key, summary, description, status, priority, issue_type, project,
+reporter, assignee, labels, url, created, updated, subtasks, scanId,
+VulnerabilityId1..VulnerabilityId5. The non-identifier fields are carried
+straight through as jira_meta for traceability in the output report (see
+TriageJob.jira_meta).
 
-Verified against a real SAST ticket description:
+Scan ID: prefers jira_issue["scanId"] (a custom field); falls back to
+regex-extracting the `scans?id=` link in the description if that's absent
+(verified against a real SAST ticket description — see the "*Scan ID:*"
+line: `[d01d7561\\-2bf5\\-48b2\\-bbaa\\-da166c671fc3|https://.../scans?id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&branch=master]`).
 
-    *Checkmarx (SAST):* SQL_Injection
-    ...
-    *Scan ID:* [d01d7561\\-2bf5\\-48b2\\-bbaa\\-da166c671fc3|https://.../scans?id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&branch=master]
-    ...
-    Review result in Checkmarx One: [SQL\\_Injection|https://.../results/d01d7561-2bf5-48b2-bbaa-da166c671fc3/1b49ad6f-057f-400c-aa32-f6bc31caf242/sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D]
+SAST result identifier(s): prefers jira_issue["VulnerabilityId1"] through
+["VulnerabilityId5"] (each an optional resultHash/pathSystemId; at least one
+of the five is populated per Prudential's ticket template) — one triage job
+per populated field. Falls back to regex-extracting `result-id=` links from
+the description if none of the five are set (verified against the same real
+ticket: `.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D`).
 
-For SCA, Prudential's Jira tickets carry each CVE on a *subtask* (summary
-line, e.g. "CVE-2021-44228 - log4j-core-2.14.1"), not in the parent ticket's
-description, while the Scan ID/scanner-type marker stay on the parent
-description exactly like SAST. The parent's `subtasks` field is expected to
-be an array as produced by Jira Automation's `{{issue.subtasks.jsonEncode}}`
-smart value — i.e. each item shaped like the Jira REST API's issue-link
-object (`{"key": ..., "fields": {"summary": ...}}`). This exact field name
-and nesting is NOT yet verified against a real payload — treat it as
-provisional until confirmed. A ticket with no `subtasks` field falls back to
-scanning the parent description directly for a CVE ID (the original,
-also-unverified approach), so this only breaks if both shapes turn out wrong.
+SCA CVE identifier(s): each CVE lives on a *subtask*'s summary line (e.g.
+"CVE-2021-44228 - log4j-core-2.14.1"), not a VulnerabilityId field. The
+parent's `subtasks` array (built by the automation's Create Variable action)
+is a flat `{"key": ..., "summary": ..., "status": ..., "assignee": ...,
+"created": ..., "url": ...}` per subtask. A ticket with no `subtasks` field
+falls back to scanning the parent description directly for a CVE ID.
 """
 import logging
 import re
@@ -45,6 +46,11 @@ _SCANNER_TYPE_RE = re.compile(r"Checkmarx\s*\\?\((SAST|SCA|IAC-SECURITY|KICS)\\?
 _SCAN_ID_URL_RE = re.compile(r"[?&]id=([0-9a-fA-F-]{36})")
 _RESULT_ID_RE = re.compile(r"result-id=([^\]&\s]+)")
 _CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
+
+# Prudential's ticket template has up to five of these custom fields, each
+# optionally holding one SAST resultHash/pathSystemId. At least one is
+# populated; the rest are blank/absent.
+_VULNERABILITY_ID_FIELDS = tuple(f"VulnerabilityId{i}" for i in range(1, 6))
 
 # Structured jira_issue fields carried straight through into the output
 # report for traceability (not used for identifier resolution).
@@ -72,12 +78,14 @@ def parse_jira_issue(jira_issue: dict) -> List[TriageJob]:
         )
     scanner_type = scanner_match.group(1).lower()
 
-    scan_id = _find_scan_id(description)
+    scan_id = jira_issue.get("scanId") or _find_scan_id(description)
     if not scan_id:
-        raise ValueError(f"{ticket_key}: could not find a Scan ID in the ticket description")
+        raise ValueError(
+            f"{ticket_key}: could not find a Scan ID (checked the scanId field and the description)"
+        )
 
     if scanner_type == "sast":
-        return _parse_sast(ticket_key, scan_id, description, jira_meta)
+        return _parse_sast(ticket_key, scan_id, description, jira_meta, jira_issue)
     if scanner_type == "sca":
         return _parse_sca(ticket_key, scan_id, description, jira_meta, jira_issue.get("subtasks"))
     raise ValueError(f"{ticket_key}: unsupported scanner type {scanner_type!r} for AI Triage")
@@ -93,12 +101,17 @@ def _find_scan_id(description: str) -> Optional[str]:
 
 
 def _parse_sast(
-    ticket_key: Optional[str], scan_id: str, description: str, jira_meta: dict
+    ticket_key: Optional[str], scan_id: str, description: str, jira_meta: dict, jira_issue: dict
 ) -> List[TriageJob]:
-    encoded_ids = _RESULT_ID_RE.findall(description)
+    encoded_ids = [
+        jira_issue[field] for field in _VULNERABILITY_ID_FIELDS if jira_issue.get(field)
+    ]
+    if not encoded_ids:
+        encoded_ids = _RESULT_ID_RE.findall(description)
     if not encoded_ids:
         raise ValueError(
-            f"{ticket_key}: found no 'result-id=' link in the ticket description"
+            f"{ticket_key}: no VulnerabilityId1..5 field and no 'result-id=' "
+            "link in the ticket description"
         )
     jobs = []
     for encoded in dict.fromkeys(encoded_ids):  # de-dupe, keep order

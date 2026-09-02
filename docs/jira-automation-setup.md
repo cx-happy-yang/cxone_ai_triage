@@ -90,11 +90,21 @@ Custom data:
       "updated": "{{issue.updated.jsonEncode}}",
       "subtasks": {{subtasksJsonArr}},
       "scanId": "{{issue.customfield_10207.jsonEncode}}",
-      "VulnerabilityId1": "{{issue.customfield_10208.jsonEncode}}"
+      "VulnerabilityId1": "{{issue.customfield_10208.jsonEncode}}",
+      "VulnerabilityId2": "{{issue.customfield_10209.jsonEncode}}",
+      "VulnerabilityId3": "{{issue.customfield_10210.jsonEncode}}",
+      "VulnerabilityId4": "{{issue.customfield_10211.jsonEncode}}",
+      "VulnerabilityId5": "{{issue.customfield_10212.jsonEncode}}"
     }
   }
 }
 ```
+
+`VulnerabilityId2`–`VulnerabilityId5` and their `customfield_1020{9,10,11,12}`
+IDs above are illustrative (sequential IDs assumed after `VulnerabilityId1`'s
+`customfield_10208`) — confirm the actual IDs for those four fields on this
+Jira site (Project settings → Fields, or `GET /rest/api/3/field`) before
+relying on them; they may not be numbered consecutively.
 
 Field-by-field:
 
@@ -103,8 +113,8 @@ Field-by-field:
 | `key`, `summary`, `status`, `priority`, `issue_type`, `project`, `reporter`, `assignee`, `labels`, `url`, `created`, `updated` | standard ticket fields | passed through as-is; `cxone_ai_triage` carries these into its output report as `jira_*` columns for traceability, not used to resolve identifiers |
 | `description` | ticket description | for SAST, this is where the scan ID and `result-id=` are regex-extracted from (Jira wiki markup produced by the Checkmarx Jira integration) — see the README's "Why this exists" section |
 | `subtasks` | the `subtasksJsonArr` variable from Step 2 | **note it is `{{subtasksJsonArr}}` with no surrounding quotes** — it's already a JSON array, quoting it would turn the array into a string literal and break parsing on the receiving end |
-| `scanId` | custom field `customfield_10207` | sent directly rather than only being embedded in `description`; **not yet consumed by `jira_parser.py`**, which still regex-extracts the scan ID from `description` — see "Next step" below |
-| `VulnerabilityId1` | custom field `customfield_10208` | **not yet consumed anywhere in `cxone_ai_triage`** — purpose/shape (e.g. is this the SAST `result-id`, meant to replace the description regex?) needs confirming before wiring it in |
+| `scanId` | custom field `customfield_10207` | preferred over the description regex by `jira_parser.py`; falls back to the description's `scans?id=` link only if this field is blank |
+| `VulnerabilityId1`–`VulnerabilityId5` | custom fields `customfield_10208`–`10212` (SAST tickets only) | each optionally holds one resultHash/pathSystemId; at least one is populated per ticket. `jira_parser.py` creates one triage job per populated field (all on the parent ticket key), and only falls back to regex-extracting `result-id=` from the description if none of the five are set |
 
 ## Step 4 — Validate
 
@@ -118,12 +128,13 @@ Field-by-field:
    dispatch), the repo owner/name in the URL is wrong, or the custom field
    IDs don't match this Jira site's actual field configuration.
 
-## Next step (not yet done)
+## Field resolution order in `cxone_ai_triage`
 
-`cxone_ai_triage/jira_parser.py` currently gets the scan ID and SAST
-`result-id` by regex-parsing `description`, and only uses `subtasks` for
-SCA CVE extraction. Now that `scanId` (and possibly `VulnerabilityId1`) are
-sent as their own structured fields, the parser could prefer those directly
-and fall back to the description regex only if they're absent — more robust
-than parsing wiki markup. Confirm what `VulnerabilityId1` is meant to hold,
-and let's wire this in.
+`jira_parser.py` prefers the structured fields above over the description:
+`scanId` for the scan ID, `VulnerabilityId1..5` for SAST result identifiers
+(one triage job per populated field). The description regex fallback (see
+the README's "Why this exists" section) only kicks in when the
+corresponding structured field is absent — e.g. for tickets predating this
+automation rule. SCA still always uses `subtasks` (or, absent that, a bare
+`CVE-\d{4}-\d+` match in the description) since there's no VulnerabilityId
+equivalent for CVEs.
