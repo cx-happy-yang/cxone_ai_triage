@@ -1,2 +1,2 @@
-CheckmarxPythonSDK>=1.9.0
+CheckmarxPythonSDK>=1.9.1
 jira>=3.0
