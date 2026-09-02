@@ -23,12 +23,17 @@ per populated field. Falls back to regex-extracting `result-id=` links from
 the description if none of the five are set (verified against the same real
 ticket: `.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D`).
 
-SCA CVE identifier(s): each CVE lives on a *subtask*'s summary line (e.g.
-"CVE-2021-44228 - log4j-core-2.14.1"), not a VulnerabilityId field. The
+SCA CVE identifier(s): each CVE lives on a *subtask*'s summary line, e.g.
+"SCA | CVE-2025-71329" — not a VulnerabilityId field, and not accompanied by
+the package name/version (verified against a real subtask summary). The
 parent's `subtasks` array (built by the automation's Create Variable action)
 is a flat `{"key": ..., "summary": ..., "status": ..., "assignee": ...,
-"created": ..., "url": ...}` per subtask. A ticket with no `subtasks` field
-falls back to scanning the parent description directly for a CVE ID.
+"created": ..., "url": ..., "package": ...}` per subtask, where `package`
+is a "Package Name/Version" custom field on the subtask (added specifically
+so the AI Triage comment can report which package/version a CVE applies to
+— see docs/jira-automation-setup.md). A ticket with no `subtasks` field
+falls back to scanning the parent description directly for a CVE ID (no
+package name/version is available on that fallback path).
 """
 import logging
 import re
@@ -164,6 +169,9 @@ def _parse_sca_subtasks(
         meta = dict(jira_meta)
         meta["parent_key"] = ticket_key
         meta["subtask_summary"] = summary
+        package = fields.get("package")
+        if package:
+            meta["package_name_version"] = package
         jobs.append(
             TriageJob(
                 scan_id=scan_id,

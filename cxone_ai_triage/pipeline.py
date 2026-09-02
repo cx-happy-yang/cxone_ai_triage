@@ -70,7 +70,10 @@ def run_pipeline(
             continue
 
         try:
-            jira_client.add_comment(job.ticket_key, format_comment(result))
+            comment = format_comment(
+                result, package_name_version=job.jira_meta.get("package_name_version")
+            )
+            jira_client.add_comment(job.ticket_key, comment)
             outcome.comment_posted = True
         except Exception as e:  # noqa: BLE001 - best-effort, don't abort the batch
             outcome.comment_error = str(e)

@@ -73,6 +73,27 @@ class TestFormatComment(unittest.TestCase):
         comment = format_comment(AiTriageResult(triageStatus="VULNERABLE", mockOrigin=True))
         self.assertIn("mock/placeholder", comment)
 
+    def test_jira_package_name_version_is_included_when_given(self):
+        comment = format_comment(
+            AiTriageResult(triageStatus="VULNERABLE"), package_name_version="log4j-core 2.14.1"
+        )
+        self.assertIn("*Package:* log4j-core 2.14.1.", comment)
+
+    def test_no_package_name_version_omits_the_clause(self):
+        comment = format_comment(AiTriageResult(triageStatus="VULNERABLE"))
+        self.assertNotIn("*Package:*", comment)
+
+    def test_jira_package_and_cxone_metadata_both_shown_when_present(self):
+        comment = format_comment(
+            AiTriageResult(
+                triageStatus="VULNERABLE",
+                metadata=VulnerabilityMetadata(component="log4j-core", version="2.14.1"),
+            ),
+            package_name_version="log4j-core 2.14.1 (from Jira)",
+        )
+        self.assertIn("*Package:* log4j-core 2.14.1 (from Jira).", comment)
+        self.assertIn("*Affected component (CxOne):* log4j-core 2.14.1.", comment)
+
 
 if __name__ == "__main__":
     unittest.main()

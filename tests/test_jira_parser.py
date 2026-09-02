@@ -110,23 +110,39 @@ class TestParseJiraIssue(unittest.TestCase):
         # subtasks are the real automation's flat shape (no "fields" nesting).
         for j in jobs:
             self.assertEqual(j.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+            self.assertEqual(j.jira_meta["package_name_version"], "log4j-core 2.14.1")
 
     def test_sca_subtasks_flat_shape_from_real_automation_rule(self):
+        # "SCA | CVE-..." is the real subtask summary format (verified);
+        # note the package is NOT in the summary, only in its own field.
         jobs = parse_jira_issue(
             {
                 "key": "JVL-10",
                 "description": r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies",
                 "scanId": "22222222-2222-2222-2222-222222222222",
                 "subtasks": [
-                    {"key": "JVL-11", "summary": "CVE-2021-44228 - log4j-core-2.14.1",
+                    {"key": "JVL-11", "summary": "SCA | CVE-2025-71329",
                      "status": "To Do", "assignee": "dev@example.com",
-                     "created": "2026-08-20T09:16:00.000-0000", "url": "https://x/browse/JVL-11"},
+                     "created": "2026-08-20T09:16:00.000-0000", "url": "https://x/browse/JVL-11",
+                     "package": "log4j-core 2.14.1"},
                 ],
             }
         )
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].cve_id, "CVE-2021-44228")
+        self.assertEqual(jobs[0].cve_id, "CVE-2025-71329")
         self.assertEqual(jobs[0].scan_id, "22222222-2222-2222-2222-222222222222")
+        self.assertEqual(jobs[0].jira_meta["package_name_version"], "log4j-core 2.14.1")
+
+    def test_sca_subtask_without_package_field_has_no_package_in_jira_meta(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "subtasks": [{"key": "JVL-11", "summary": "SCA | CVE-2025-71329"}],
+            }
+        )
+        self.assertNotIn("package_name_version", jobs[0].jira_meta)
 
     def test_scan_id_field_takes_precedence_over_description(self):
         # Description points at a different scan id than the scanId field;

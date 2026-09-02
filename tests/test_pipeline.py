@@ -68,6 +68,20 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(jira_client.comments[0][0], "JVL-2")
         self.assertIn("PROPOSED_NOT_EXPLOITABLE", jira_client.comments[0][1])
 
+    def test_sca_job_package_name_version_is_passed_into_the_comment(self):
+        job = TriageJob(
+            scan_id="s1", scanner_type="sca", ticket_key="JVL-11", cve_id="CVE-2025-71329",
+            jira_meta={"package_name_version": "log4j-core 2.14.1"},
+        )
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+        jira_client = FakeJiraClient()
+
+        run_pipeline([job], resolver, jira_client)
+
+        self.assertIn("log4j-core 2.14.1", jira_client.comments[0][1])
+
     def test_failed_trigger_skips_poll_and_comment(self):
         job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="h1")
         outcome = TriageOutcome(job=job, status="failed", error="boom")

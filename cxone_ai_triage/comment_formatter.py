@@ -7,13 +7,19 @@ summary, analysis (confidence/reachability/exploitability reasoning +
 usage_locations), metadata (SCA component/version), reasoningTrace
 (verification steps + repository info), scanner/resultID/triagedAt, and
 flags a mockOrigin result as a placeholder rather than a live verdict.
+
+For SCA, also takes the package name/version straight from the originating
+Jira subtask (TriageJob.jira_meta["package_name_version"], via a "Package
+Name/Version" custom field — see docs/jira-automation-setup.md) rather than
+relying solely on AiTriageResult.metadata.component/.version, since CxOne
+doesn't always populate that.
 """
-from typing import List
+from typing import List, Optional
 
 from CheckmarxPythonSDK.CxOne.dto import AiTriageResult
 
 
-def format_comment(result: AiTriageResult) -> str:
+def format_comment(result: AiTriageResult, package_name_version: Optional[str] = None) -> str:
     """Build one paragraph (sentence per field group, joined with spaces)."""
     parts: List[str] = []
 
@@ -52,6 +58,9 @@ def format_comment(result: AiTriageResult) -> str:
     if analysis and analysis.usage_locations:
         parts.append(f"*Usage locations:* {', '.join(analysis.usage_locations)}.")
 
+    if package_name_version:
+        parts.append(f"*Package:* {package_name_version}.")
+
     metadata = result.metadata
     if metadata and (metadata.component or metadata.version):
         component_bit = metadata.component or "unknown component"
@@ -59,7 +68,7 @@ def format_comment(result: AiTriageResult) -> str:
             component_bit += f" {metadata.version}"
         if metadata.dependency_type:
             component_bit += f" ({metadata.dependency_type})"
-        parts.append(f"*Affected component:* {component_bit}.")
+        parts.append(f"*Affected component (CxOne):* {component_bit}.")
 
     if result.summary:
         parts.append(f"*Summary:* {result.summary}")

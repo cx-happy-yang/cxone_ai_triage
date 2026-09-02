@@ -22,11 +22,13 @@ checked in this order:
      is populated per ticket); one triage job is created per populated
      field, all on the parent ticket key.
    - `subtasks` — for SCA, each CVE lives on a subtask's summary line (e.g.
-     `"CVE-2021-44228 - log4j-core-2.14.1"`), not a VulnerabilityId field.
-     One triage job per subtask that has a CVE in its summary, using the
-     *subtask's own key* (not the parent's) so the AI Triage comment lands
-     on the right subtask; subtasks without a CVE are skipped with a
-     warning, not fatal.
+     `"SCA | CVE-2025-71329"`), not a VulnerabilityId field. Each subtask's
+     `package` field (a "Package Name/Version" custom field, since the
+     package isn't in the summary) is carried into the output report and
+     the AI Triage Jira comment. One triage job per subtask that has a CVE
+     in its summary, using the *subtask's own key* (not the parent's) so
+     the AI Triage comment lands on the right subtask; subtasks without a
+     CVE are skipped with a warning, not fatal.
 2. **The ticket's free-text `description`** (Jira wiki markup produced by
    the Checkmarx Jira integration), used as a fallback whenever the field
    above is absent — e.g. for tickets predating this automation rule, or a
@@ -85,8 +87,11 @@ until `triageStatus` leaves `NOT_TRIAGED`/`IN_PROGRESS` (or times out —
 (`AiTriageResult`: verdict, reachability + reasoning, exploitability +
 reasoning, attackability, confidence score + explanation, usage locations,
 SCA component/version, verification steps, repository info, scanner/result/
-triagedAt) into one paragraph (`comment_formatter.format_comment`) and posts
-it as a comment on the originating ticket/subtask key via `jira_client.py`.
+triagedAt) — plus, for SCA, the package name/version straight from the
+originating Jira subtask (`jira_meta["package_name_version"]`, since CxOne
+doesn't always populate `metadata.component`/`.version`) — into one
+paragraph (`comment_formatter.format_comment`) and posts it as a comment on
+the originating ticket/subtask key via `jira_client.py`.
 
 A failure at either step (timeout polling, or the Jira API call itself)
 is recorded on the output row (`poll_error` / `comment_error`) but never
