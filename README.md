@@ -233,3 +233,8 @@ jobs:
 
 No `-i`/`-e` flag needed — the binary reads `$GITHUB_EVENT_PATH`, which the
 runner sets for every triggered event, including `repository_dispatch`.
+
+The Jira side that fires this — the Automation rule building the payload
+above (including the `subtasks` array) and sending it to
+`/repos/.../dispatches` — is documented in
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md).
