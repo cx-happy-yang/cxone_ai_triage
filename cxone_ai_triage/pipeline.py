@@ -1,7 +1,12 @@
-"""Orchestrates one job end to end: resolve identifiers + trigger AI Triage
-(TriageResolver) -> poll for the finished result -> post it as a Jira
+"""Orchestrates the whole run: resolve identifiers + trigger AI Triage for
+every job (TriageResolver — batching jobs that share a scan_id/scanner_type
+into one trigger request each) -> poll each result -> post it as a Jira
 comment (JiraCommentClient). Kept separate from TriageResolver so the
 CxOne-only resolution logic stays testable without any Jira dependency.
+
+Polling and commenting stay per-job even when triggering was batched: each
+result has its own distinct groupId to poll, and (for SCA) its own subtask
+to comment on.
 """
 import logging
 from typing import List, Optional
@@ -30,11 +35,9 @@ def run_pipeline(
     never flip a job back to "failed" — see poll_error / comment_error on
     the outcome instead.
     """
-    outcomes = []
-    for job in jobs:
-        outcome = resolver.resolve_and_trigger(job)
-        outcomes.append(outcome)
+    outcomes = resolver.resolve_and_trigger_all(jobs)
 
+    for job, outcome in zip(jobs, outcomes):
         if outcome.status == "failed" or not poll:
             continue
 

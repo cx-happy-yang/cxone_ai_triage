@@ -7,9 +7,10 @@ from cxone_ai_triage.pipeline import run_pipeline
 
 
 class FakeResolver:
-    """Stands in for TriageResolver: resolve_and_trigger returns a
-    preconfigured outcome per scan_id, poll_ai_triage_result returns a
-    preconfigured AiTriageResult or raises, per test."""
+    """Stands in for TriageResolver: resolve_and_trigger_all returns a
+    preconfigured outcome per scan_id (batching is TriageResolver's own
+    concern, exercised separately in test_resolver.py), poll_ai_triage_result
+    returns a preconfigured AiTriageResult or raises, per test."""
 
     def __init__(self, outcome_by_scan=None, poll_result=None, poll_error=None):
         self.outcome_by_scan = outcome_by_scan or {}
@@ -17,8 +18,8 @@ class FakeResolver:
         self.poll_error = poll_error
         self.poll_calls = []
 
-    def resolve_and_trigger(self, job: TriageJob) -> TriageOutcome:
-        return self.outcome_by_scan[job.scan_id]
+    def resolve_and_trigger_all(self, jobs) -> list:
+        return [self.outcome_by_scan[job.scan_id] for job in jobs]
 
     def poll_ai_triage_result(self, project_id, group_id, timeout_seconds=600, interval_seconds=15):
         self.poll_calls.append((project_id, group_id))

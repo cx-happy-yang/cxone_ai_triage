@@ -19,9 +19,18 @@ not for the trigger call itself) is resolved as:
     "similarityId+packageIdentifier+projectId" concatenation format isn't
     documented anywhere in the SDK/API and /api/risks returns the
     authoritative value directly.
+
+Batching: resultID resolution (similarityId -> alternateId, groupId, ...) is
+always per-job, since each result has its own distinct groupId to poll
+later. But the trigger call itself accepts multiple resultIDs in one
+bucket, so jobs sharing the same (scan_id, scanner_type) — e.g. a SAST
+ticket with several populated VulnerabilityId fields — are combined into a
+single POST /api/ai-triage/triage request instead of one per job, and all
+their outcomes get the same triageID back.
 """
 import logging
 import time
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from CheckmarxPythonSDK.CxOne import (
@@ -185,9 +194,11 @@ class TriageResolver:
             )
         return candidates[0].groupId
 
-    # ---- public entry point ----------------------------------------------
-
-    def resolve_and_trigger(self, job: TriageJob) -> TriageOutcome:
+    def _resolve_only(self, job: TriageJob) -> TriageOutcome:
+        """Resolve one job's projectId/similarityId/alternateId/groupId.
+        Does not trigger anything. On failure, returns an outcome with
+        status="failed" and .error set instead of raising.
+        """
         outcome = TriageOutcome(job=job)
         try:
             outcome.project_id = self._get_project_id(job.scan_id)
@@ -198,26 +209,65 @@ class TriageResolver:
             outcome.group_id = self._resolve_group_id(
                 job, outcome.project_id, outcome.similarity_id
             )
-
-            request = AiTriageRequest(
-                scanID=job.scan_id,
-                buckets=[
-                    TriageBucket(
-                        scannerType=job.scanner_type, resultIDs=[outcome.alternate_id]
-                    )
-                ],
-            )
-            response = self._ai_triage_api.trigger_ai_triage(request)
-            outcome.triage_id = response.triageID
-            outcome.status = response.status or "accepted"
         except Exception as e:  # noqa: BLE001 - keep the batch going on a per-row failure
             outcome.status = "failed"
             outcome.error = str(e)
             logger.error("%s failed: %s", job.ticket_key or job.scan_id, e)
         return outcome
 
+    def _trigger_batch(self, scan_id: str, scanner_type: str, outcomes: List[TriageOutcome]) -> None:
+        """Trigger one POST /api/ai-triage/triage for every outcome in this
+        (scan_id, scanner_type) group, bucketing their alternateIds together.
+        Updates each outcome in place; a failure here fails all of them.
+        """
+        try:
+            request = AiTriageRequest(
+                scanID=scan_id,
+                buckets=[
+                    TriageBucket(
+                        scannerType=scanner_type,
+                        resultIDs=[o.alternate_id for o in outcomes],
+                    )
+                ],
+            )
+            response = self._ai_triage_api.trigger_ai_triage(request)
+            for outcome in outcomes:
+                outcome.triage_id = response.triageID
+                outcome.status = response.status or "accepted"
+        except Exception as e:  # noqa: BLE001 - keep the rest of the run going
+            for outcome in outcomes:
+                outcome.status = "failed"
+                outcome.error = str(e)
+            tickets = {o.job.ticket_key or o.job.scan_id for o in outcomes}
+            logger.error(
+                "batch trigger for scan %s (%s, %d result(s), tickets=%s) failed: %s",
+                scan_id, scanner_type, len(outcomes), sorted(tickets), e,
+            )
+
+    # ---- public entry points ----------------------------------------------
+
+    def resolve_and_trigger(self, job: TriageJob) -> TriageOutcome:
+        """Resolve and trigger a single job. Equivalent to
+        resolve_and_trigger_all([job])[0]."""
+        return self.resolve_and_trigger_all([job])[0]
+
     def resolve_and_trigger_all(self, jobs: List[TriageJob]) -> List[TriageOutcome]:
-        return [self.resolve_and_trigger(job) for job in jobs]
+        """Resolve every job, then trigger AI Triage — batching jobs that
+        share the same (scan_id, scanner_type) into one request each (e.g. a
+        SAST ticket with several populated VulnerabilityId fields), rather
+        than one request per job.
+        """
+        outcomes = [self._resolve_only(job) for job in jobs]
+
+        batches: Dict[Tuple[str, str], List[TriageOutcome]] = defaultdict(list)
+        for job, outcome in zip(jobs, outcomes):
+            if outcome.status != "failed":
+                batches[(job.scan_id, job.scanner_type)].append(outcome)
+
+        for (scan_id, scanner_type), batch_outcomes in batches.items():
+            self._trigger_batch(scan_id, scanner_type, batch_outcomes)
+
+        return outcomes
 
     # ---- polling for the finished result ---------------------------------
 

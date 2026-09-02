@@ -22,6 +22,7 @@ SCAN_ID = "11111111-1111-1111-1111-111111111111"
 PROJECT_ID = "proj-abc"
 
 SAST_ROW = Result(type="sast", id="r1", alternate_id="alt-sast-1", similarity_id="123456", data=None)
+SAST_ROW_2 = Result(type="sast", id="r5", alternate_id="alt-sast-2", similarity_id="654321", data=None)
 SCA_ROW_A = Result(
     type="sca", id="r2", alternate_id="alt-sca-a", similarity_id="CVE-2021-44228",
     data={"packageIdentifier": "log4j-core-2.14.1"},
@@ -31,7 +32,12 @@ SCA_ROW_B = Result(
     data={"packageIdentifier": "log4j-api-2.14.1"},
 )
 NOISE_ROW = Result(type="sast", id="r4", alternate_id="alt-noise", similarity_id="999999", data=None)
-ALL_RESULTS = [SAST_ROW, SCA_ROW_A, SCA_ROW_B, NOISE_ROW]
+ALL_RESULTS = [SAST_ROW, SAST_ROW_2, SCA_ROW_A, SCA_ROW_B, NOISE_ROW]
+
+_SAST_RESULTS_BY_HASH = {
+    "hash-xyz": SastResult(result_hash="hash-xyz", similarity_id=123456),
+    "hash-two": SastResult(result_hash="hash-two", similarity_id=654321),
+}
 
 
 class FakeSdkResolver(TriageResolver):
@@ -40,6 +46,7 @@ class FakeSdkResolver(TriageResolver):
     def __init__(self):
         super().__init__()
         self.results_call_count = 0
+        self.trigger_calls = []  # list of (scanID, [(scannerType, resultIDs), ...])
         self._scans_api.get_a_scan_by_id = self._fake_get_a_scan_by_id
         self._sast_results_api.get_sast_results_by_scan_id = self._fake_get_sast_results
         self._scanner_results_api.get_all_scanners_results_by_scan_id = self._fake_get_all_results
@@ -52,8 +59,9 @@ class FakeSdkResolver(TriageResolver):
 
     def _fake_get_sast_results(self, scan_id, result_id=None, limit=1, **kw):
         assert scan_id == SCAN_ID
-        assert result_id == ["hash-xyz"]
-        return {"results": [SastResult(result_hash="hash-xyz", similarity_id=123456)], "totalCount": 1}
+        hash_ = result_id[0]
+        result = _SAST_RESULTS_BY_HASH.get(hash_)
+        return {"results": [result] if result else [], "totalCount": 1 if result else 0}
 
     def _fake_get_all_results(self, scan_id, offset=0, limit=500, **kw):
         assert scan_id == SCAN_ID
@@ -70,7 +78,11 @@ class FakeSdkResolver(TriageResolver):
         )
 
     def _fake_trigger_ai_triage(self, request):
-        return AiTriageResponse(scanID=request.scanID, status="accepted", triageID="triage-123", published=True)
+        self.trigger_calls.append(
+            (request.scanID, [(b.scannerType, b.resultIDs) for b in request.buckets])
+        )
+        triage_id = f"triage-{len(self.trigger_calls)}"
+        return AiTriageResponse(scanID=request.scanID, status="accepted", triageID=triage_id, published=True)
 
 
 class TestTriageResolver(unittest.TestCase):
@@ -85,7 +97,10 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.similarity_id, "123456")
         self.assertEqual(outcome.alternate_id, "alt-sast-1")
         self.assertEqual(outcome.group_id, "123456")  # SAST groupId == similarityId
-        self.assertEqual(outcome.triage_id, "triage-123")
+        self.assertEqual(outcome.triage_id, "triage-1")
+        self.assertEqual(
+            self.resolver.trigger_calls, [(SCAN_ID, [("sast", ["alt-sast-1"])])]
+        )
 
     def test_sca_job_ambiguous_without_package_identifier_fails(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-2", cve_id="CVE-2021-44228")
@@ -115,6 +130,51 @@ class TestTriageResolver(unittest.TestCase):
         self.resolver.resolve_and_trigger_all(jobs)
         self.assertEqual(self.resolver.results_call_count, 1)
         self.assertEqual(self.resolver._project_id_by_scan[SCAN_ID], PROJECT_ID)
+
+    def test_multiple_sast_jobs_on_same_scan_are_batched_into_one_trigger_call(self):
+        # e.g. a ticket with VulnerabilityId1 and VulnerabilityId2 both populated.
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-two"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        self.assertEqual([o.status for o in outcomes], ["accepted", "accepted"])
+        self.assertEqual({o.alternate_id for o in outcomes}, {"alt-sast-1", "alt-sast-2"})
+        # One trigger call, one bucket, both resultIDs together.
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+        scan_id, buckets = self.resolver.trigger_calls[0]
+        self.assertEqual(scan_id, SCAN_ID)
+        self.assertEqual(len(buckets), 1)
+        scanner_type, result_ids = buckets[0]
+        self.assertEqual(scanner_type, "sast")
+        self.assertEqual(set(result_ids), {"alt-sast-1", "alt-sast-2"})
+        # Both outcomes share the one triageID the batched call returned.
+        self.assertEqual(outcomes[0].triage_id, outcomes[1].triage_id)
+
+    def test_batch_trigger_failure_fails_every_outcome_in_the_batch(self):
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-two"),
+        ]
+        self.resolver._ai_triage_api.trigger_ai_triage = lambda request: (_ for _ in ()).throw(
+            RuntimeError("503 Service Unavailable")
+        )
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+        self.assertEqual([o.status for o in outcomes], ["failed", "failed"])
+        self.assertTrue(all("503" in o.error for o in outcomes))
+
+    def test_job_that_fails_resolution_is_excluded_from_its_batch(self):
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="does-not-exist"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+        self.assertEqual(outcomes[0].status, "accepted", outcomes[0].error)
+        self.assertEqual(outcomes[1].status, "failed")
+        # The batch only ever contained the one resolvable job.
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+        self.assertEqual(self.resolver.trigger_calls[0][1], [("sast", ["alt-sast-1"])])
 
     def test_unknown_result_hash_fails_without_raising(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-4", result_hash="does-not-exist")

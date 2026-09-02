@@ -17,10 +17,13 @@ checked in this order:
 
 1. **Structured fields on the payload**, when present:
    - `scanId` — a custom field holding the scan ID directly.
-   - `VulnerabilityId1` .. `VulnerabilityId5` — up to five custom fields,
-     each optionally holding one SAST resultHash/pathSystemId (at least one
-     is populated per ticket); one triage job is created per populated
-     field, all on the parent ticket key.
+   - `VulnerabilityId1` .. `VulnerabilityId5` — up to five custom fields
+     (only `VulnerabilityId1` is required; 2–5 are optional), each
+     optionally holding one SAST resultHash/pathSystemId; one triage job is
+     created per populated field, all on the parent ticket key. When more
+     than one is populated, `TriageResolver` batches them into a single
+     `POST /api/ai-triage/triage` call (one bucket, multiple resultIDs)
+     instead of one request per result — see "Batching" below.
    - `subtasks` — for SCA, each CVE lives on a subtask's summary line (e.g.
      `"SCA | CVE-2025-71329"`), not a VulnerabilityId field. One triage job
      per subtask that has a CVE in its summary, using the *subtask's own
@@ -77,6 +80,21 @@ guessing a delimiter/order.
 `GET /api/results` has no `similarityId` filter, so every row for a scan is
 paged through (500 at a time) and cached per scan — unavoidable, but paid
 once per scan even across many ticket rows in the same batch.
+
+### Batching the trigger call
+
+Each job's identifiers (`similarityId`, `alternateId`, `groupId`, ...) are
+always resolved individually — every result has its own distinct `groupId`
+to poll later regardless of how the trigger was submitted. But
+`resolver.resolve_and_trigger_all` groups jobs sharing the same
+`(scan_id, scanner_type)` — e.g. a SAST ticket with `VulnerabilityId1` and
+`VulnerabilityId2` both populated — into a **single**
+`POST /api/ai-triage/triage` request (one bucket, multiple `resultIDs`)
+instead of one request per result; all outcomes in that batch get back the
+same `triageID`. A batch's trigger call failing fails every outcome in it;
+a job that fails identifier *resolution* is excluded from its batch rather
+than blocking the others. Polling and Jira commenting stay per-job either
+way (see below).
 
 ### Polling the result and posting it back to Jira
 
