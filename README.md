@@ -87,14 +87,17 @@ Each job's identifiers (`similarityId`, `alternateId`, `groupId`, ...) are
 always resolved individually — every result has its own distinct `groupId`
 to poll later regardless of how the trigger was submitted. But
 `resolver.resolve_and_trigger_all` groups jobs sharing the same
-`(scan_id, scanner_type)` — e.g. a SAST ticket with `VulnerabilityId1` and
-`VulnerabilityId2` both populated — into a **single**
-`POST /api/ai-triage/triage` request (one bucket, multiple `resultIDs`)
-instead of one request per result; all outcomes in that batch get back the
-same `triageID`. A batch's trigger call failing fails every outcome in it;
-a job that fails identifier *resolution* is excluded from its batch rather
-than blocking the others. Polling and Jira commenting stay per-job either
-way (see below).
+`(scan_id, scanner_type)` into a **single** `POST /api/ai-triage/triage`
+request (one bucket, multiple `resultIDs`) instead of one request per
+result; all outcomes in that batch get back the same `triageID`. This
+covers both: a SAST ticket with `VulnerabilityId1` and `VulnerabilityId2`
+both populated, and an SCA ticket with multiple `"SCA | CVE-..."` subtasks
+(they share the ticket's one `scanId`, so they group together the same
+way). A batch's trigger call failing fails every outcome in it; a job that
+fails identifier *resolution* is excluded from its batch rather than
+blocking the others. Polling and Jira commenting stay per-job either way
+(see below) — each result (and, for SCA, each subtask) still gets its own
+verdict and its own comment.
 
 ### Polling the result and posting it back to Jira
 

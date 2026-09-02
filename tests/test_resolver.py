@@ -31,8 +31,12 @@ SCA_ROW_B = Result(
     type="sca", id="r3", alternate_id="alt-sca-b", similarity_id="CVE-2021-44228",
     data={"packageIdentifier": "log4j-api-2.14.1"},
 )
+SCA_ROW_C = Result(
+    type="sca", id="r6", alternate_id="alt-sca-c", similarity_id="CVE-2022-23305",
+    data={"packageIdentifier": "log4j-core-2.14.1"},
+)
 NOISE_ROW = Result(type="sast", id="r4", alternate_id="alt-noise", similarity_id="999999", data=None)
-ALL_RESULTS = [SAST_ROW, SAST_ROW_2, SCA_ROW_A, SCA_ROW_B, NOISE_ROW]
+ALL_RESULTS = [SAST_ROW, SAST_ROW_2, SCA_ROW_A, SCA_ROW_B, SCA_ROW_C, NOISE_ROW]
 
 _SAST_RESULTS_BY_HASH = {
     "hash-xyz": SastResult(result_hash="hash-xyz", similarity_id=123456),
@@ -151,6 +155,31 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(set(result_ids), {"alt-sast-1", "alt-sast-2"})
         # Both outcomes share the one triageID the batched call returned.
         self.assertEqual(outcomes[0].triage_id, outcomes[1].triage_id)
+
+    def test_multiple_sca_jobs_on_same_scan_are_batched_into_one_trigger_call(self):
+        # e.g. one ticket with two subtasks, each "SCA | CVE-...", same
+        # scanId/packageNameVersion per README's "one package per ticket".
+        jobs = [
+            TriageJob(
+                scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-11",
+                cve_id="CVE-2021-44228", package_identifier="log4j-core-2.14.1",
+            ),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-12", cve_id="CVE-2022-23305"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        self.assertEqual([o.status for o in outcomes], ["accepted", "accepted"])
+        self.assertEqual({o.alternate_id for o in outcomes}, {"alt-sca-a", "alt-sca-c"})
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+        scan_id, buckets = self.resolver.trigger_calls[0]
+        self.assertEqual(scan_id, SCAN_ID)
+        self.assertEqual(len(buckets), 1)
+        scanner_type, result_ids = buckets[0]
+        self.assertEqual(scanner_type, "sca")
+        self.assertEqual(set(result_ids), {"alt-sca-a", "alt-sca-c"})
+        self.assertEqual(outcomes[0].triage_id, outcomes[1].triage_id)
+        # Each subtask keeps its own groupId for independent polling later.
+        self.assertNotEqual(outcomes[0].group_id, outcomes[1].group_id)
 
     def test_batch_trigger_failure_fails_every_outcome_in_the_batch(self):
         jobs = [
