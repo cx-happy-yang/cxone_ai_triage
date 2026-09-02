@@ -83,6 +83,29 @@ class TestFormatComment(unittest.TestCase):
         comment = format_comment(AiTriageResult(triageStatus="VULNERABLE"))
         self.assertNotIn("*Package:*", comment)
 
+    def test_vulnerability_label_and_subtask_key_lead_the_comment(self):
+        # These identify which result a comment is about when several land
+        # on the same parent ticket (comments never go on the subtask itself).
+        comment = format_comment(
+            AiTriageResult(triageStatus="VULNERABLE"),
+            vulnerability_label="CVE-2021-44228",
+            vulnerability_label_name="CVE ID",
+            subtask_key="JVL-11",
+        )
+        self.assertTrue(comment.startswith("*CVE ID:* CVE-2021-44228. *Subtask:* JVL-11."))
+
+    def test_vulnerability_label_defaults_to_vulnerability_id_for_sast(self):
+        comment = format_comment(
+            AiTriageResult(triageStatus="VULNERABLE"), vulnerability_label="hash-xyz"
+        )
+        self.assertTrue(comment.startswith("*Vulnerability ID:* hash-xyz."))
+
+    def test_no_vulnerability_label_or_subtask_key_omits_those_clauses(self):
+        comment = format_comment(AiTriageResult(triageStatus="VULNERABLE"))
+        self.assertNotIn("*Vulnerability ID:*", comment)
+        self.assertNotIn("*CVE ID:*", comment)
+        self.assertNotIn("*Subtask:*", comment)
+
     def test_jira_package_and_cxone_metadata_both_shown_when_present(self):
         comment = format_comment(
             AiTriageResult(

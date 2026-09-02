@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Jira comments for SCA results were being posted on the originating
+  **subtask**, not the parent ticket. Comments now always go on the parent
+  ticket key for both SAST and SCA — SAST already worked this way (there's
+  no subtask involved), but SCA jobs resolved from a subtask now target
+  `job.ticket_key` (the parent) instead of the subtask's own key. Since
+  several results can now land comments on one ticket (multiple
+  `VulnerabilityId`s for SAST, multiple `"SCA | CVE-..."` subtasks for SCA),
+  each comment now leads with which specific vulnerability it's about —
+  `*Vulnerability ID:*` for SAST (matching the ticket's `VulnerabilityIdN`
+  field name) or `*CVE ID:*` for SCA — and, for SCA, `*Subtask:*` so they
+  stay distinguishable. The subtask key itself is now carried in
+  `jira_meta["subtask_key"]` instead of the removed `jira_meta["parent_key"]`
+  (which is redundant now that `ticket_key` already is the parent).
+
 ## [0.2.0]
 
 ### Fixed

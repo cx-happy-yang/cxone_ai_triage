@@ -83,6 +83,38 @@ class TestRunPipeline(unittest.TestCase):
 
         self.assertIn("log4j-core 2.14.1", jira_client.comments[0][1])
 
+    def test_sca_comment_posts_to_parent_ticket_not_subtask(self):
+        # job.ticket_key is already the parent (jira_parser sets it that way);
+        # jira_meta["subtask_key"] is where the subtask lives instead.
+        job = TriageJob(
+            scan_id="s1", scanner_type="sca", ticket_key="JVL-10", cve_id="CVE-2021-44228",
+            jira_meta={"subtask_key": "JVL-11", "package_name_version": "log4j-core 2.14.1"},
+        )
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+        jira_client = FakeJiraClient()
+
+        run_pipeline([job], resolver, jira_client)
+
+        issue_key, comment = jira_client.comments[0]
+        self.assertEqual(issue_key, "JVL-10")
+        self.assertIn("*CVE ID:* CVE-2021-44228.", comment)
+        self.assertIn("*Subtask:* JVL-11.", comment)
+
+    def test_sast_comment_includes_result_hash_as_vulnerability_label(self):
+        job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+        jira_client = FakeJiraClient()
+
+        run_pipeline([job], resolver, jira_client)
+
+        issue_key, comment = jira_client.comments[0]
+        self.assertEqual(issue_key, "JVL-2")
+        self.assertIn("*Vulnerability ID:* hash-xyz.", comment)
+
     def test_failed_trigger_skips_poll_and_comment(self):
         job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="h1")
         outcome = TriageOutcome(job=job, status="failed", error="boom")

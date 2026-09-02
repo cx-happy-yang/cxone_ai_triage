@@ -180,7 +180,7 @@ def _parse_sca_subtasks(
             continue
 
         meta = dict(jira_meta)
-        meta["parent_key"] = ticket_key
+        meta["subtask_key"] = subtask_key
         meta["subtask_summary"] = summary
         if package_name_version:
             meta["package_name_version"] = package_name_version
@@ -188,7 +188,11 @@ def _parse_sca_subtasks(
             TriageJob(
                 scan_id=scan_id,
                 scanner_type="sca",
-                ticket_key=subtask_key or ticket_key,
+                # The Jira comment always goes on the parent ticket, not the
+                # subtask - subtask_key is kept in jira_meta for traceability
+                # and included in the comment body so multiple CVEs' comments
+                # on one parent ticket stay distinguishable.
+                ticket_key=ticket_key,
                 cve_id=cve_match.group(0).upper(),
                 jira_meta=meta,
             )
