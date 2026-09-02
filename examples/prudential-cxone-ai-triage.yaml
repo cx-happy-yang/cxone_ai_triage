@@ -1,0 +1,74 @@
+# Target repo: happy-cook/JavaVulnerableLab
+# Path: .github/workflows/cxone-AI-Triage.yaml
+#
+# Extends Prudential's existing diagnostic-logging workflow with the steps
+# that actually run cxone-ai-triage: download the released binary, run it
+# against this event's payload ($GITHUB_EVENT_PATH, read automatically —
+# see the repo's README "Usage" section), and upload the result.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions, on
+# THIS repo, not cxone_ai_triage): CXONE_SERVER, CXONE_ACCESS_CONTROL_URL,
+# CXONE_TENANT_NAME, CXONE_CLIENT_ID, CXONE_CLIENT_SECRET, JIRA_SERVER,
+# JIRA_EMAIL, JIRA_API_TOKEN. See ../README.md "Authentication".
+
+name: CxOne AI Triage
+
+on:
+  repository_dispatch:
+    types: [cxone-ai-triage]
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log incoming Jira payload
+        run: |
+          echo "Jira Key: ${{ github.event.client_payload.jira_issue.key }}"
+          echo "Summary: ${{ github.event.client_payload.jira_issue.summary }}"
+          echo "Project: ${{ github.event.client_payload.jira_issue.project }}"
+          echo "URL: ${{ github.event.client_payload.jira_issue.url }}"
+          echo "description: ${{ github.event.client_payload.jira_issue.description }}"
+          echo "scan Id: ${{ github.event.client_payload.jira_issue.scanId }}"
+          echo "Vulnerability Id 1: ${{ github.event.client_payload.jira_issue.VulnerabilityId1 }}"
+          # 完整打印 subtasks 原始JSON
+          echo "==== Subtasks raw payload ===="
+          echo '${{ toJSON(github.event.client_payload.jira_issue.subtasks) }}'
+
+      - name: Iterate & print each subtask detail
+        if: github.event.client_payload.jira_issue.subtasks != '[]'
+        run: |
+          echo "==== List each subtask ===="
+          SUBTASKS='${{ toJSON(github.event.client_payload.jira_issue.subtasks) }}'
+          echo "$SUBTASKS" | jq -c '.[]' | while read -r item; do
+            key=$(echo "$item" | jq -r '.key')
+            summary=$(echo "$item" | jq -r '.summary')
+            status=$(echo "$item" | jq -r '.status')
+            assignee=$(echo "$item" | jq -r '.assignee')
+            echo "Subtask >> key=$key | summary=$summary | status=$status | assignee=$assignee"
+          done
+
+      - name: Download cxone-ai-triage
+        run: |
+          curl -fsSL -o cxone-ai-triage \
+            "https://github.com/cx-happy-yang/cxone_ai_triage/releases/latest/download/cxone-ai-triage-linux-x64"
+          chmod +x cxone-ai-triage
+
+      - name: Run CxOne AI Triage
+        env:
+          CXONE_SERVER: ${{ secrets.CXONE_SERVER }}
+          CXONE_ACCESS_CONTROL_URL: ${{ secrets.CXONE_ACCESS_CONTROL_URL }}
+          CXONE_TENANT_NAME: ${{ secrets.CXONE_TENANT_NAME }}
+          CXONE_GRANT_TYPE: client_credentials
+          CXONE_CLIENT_ID: ${{ secrets.CXONE_CLIENT_ID }}
+          CXONE_CLIENT_SECRET: ${{ secrets.CXONE_CLIENT_SECRET }}
+          JIRA_SERVER: ${{ secrets.JIRA_SERVER }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: ./cxone-ai-triage -o triage_results.json -v
+
+      - name: Upload triage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage_results
+          path: triage_results.json

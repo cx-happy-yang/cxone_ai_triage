@@ -200,41 +200,26 @@ pyinstaller --onefile --name cxone-ai-triage main.py
 ```
 
 `.github/workflows/build-binary.yml` builds Linux/Windows/macOS binaries on
-every push to `main` and on `v*` tags, uploaded as workflow artifacts — that's
-the artifact to hand to Prudential.
+every push to `main` and on `v*` tags. A `v*` tag push additionally publishes
+them as assets on a GitHub Release (this repo is public, so the release
+asset URLs are fetchable with a plain `curl`, no auth needed) — that's what
+Prudential's pipeline downloads from, at a stable URL that always points to
+the latest release:
+
+```
+https://github.com/cx-happy-yang/cxone_ai_triage/releases/latest/download/cxone-ai-triage-linux-x64
+```
 
 ## Running the binary in Prudential's GitHub Actions
 
-```yaml
-name: CxOne AI Triage
-
-on:
-  repository_dispatch:
-    types: [cxone-ai-triage]
-
-jobs:
-  triage:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Run CxOne AI Triage
-        env:
-          CXONE_SERVER: ${{ secrets.CXONE_SERVER }}
-          CXONE_ACCESS_CONTROL_URL: ${{ secrets.CXONE_ACCESS_CONTROL_URL }}
-          CXONE_TENANT_NAME: ${{ secrets.CXONE_TENANT_NAME }}
-          CXONE_GRANT_TYPE: client_credentials
-          CXONE_CLIENT_ID: ${{ secrets.CXONE_CLIENT_ID }}
-          CXONE_CLIENT_SECRET: ${{ secrets.CXONE_CLIENT_SECRET }}
-          JIRA_SERVER: ${{ secrets.JIRA_SERVER }}
-          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: ./cxone-ai-triage -o triage_results.json
-      - name: Upload result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: triage_results
-          path: triage_results.json
-```
+[`examples/prudential-cxone-ai-triage.yaml`](examples/prudential-cxone-ai-triage.yaml)
+is the full pipeline for `happy-cook/JavaVulnerableLab`'s
+`.github/workflows/cxone-AI-Triage.yaml`: it keeps the existing
+diagnostic-logging steps and adds downloading the released binary, running
+it (reads `$GITHUB_EVENT_PATH` automatically, no flags needed), and
+uploading `triage_results.json` as a workflow artifact. Needs the same
+`CXONE_*`/`JIRA_*` secrets as above, configured on that repo (Settings →
+Secrets and variables → Actions).
 
 No `-i`/`-e` flag needed — the binary reads `$GITHUB_EVENT_PATH`, which the
 runner sets for every triggered event, including `repository_dispatch`.
