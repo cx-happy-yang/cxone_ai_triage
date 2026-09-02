@@ -66,11 +66,13 @@ class TestParseJiraIssue(unittest.TestCase):
             }
         )
         self.assertEqual(len(jobs), 2)
-        self.assertEqual({j.ticket_key for j in jobs}, {"JVL-11", "JVL-12"})
+        # ticket_key (where the Jira comment is posted) is always the parent,
+        # never the subtask; the subtask key is kept in jira_meta instead.
+        self.assertEqual({j.ticket_key for j in jobs}, {"JVL-10"})
+        self.assertEqual({j.jira_meta["subtask_key"] for j in jobs}, {"JVL-11", "JVL-12"})
         self.assertEqual({j.cve_id for j in jobs}, {"CVE-2021-44228", "CVE-2022-23305"})
         for j in jobs:
             self.assertEqual(j.scan_id, "22222222-2222-2222-2222-222222222222")
-            self.assertEqual(j.jira_meta["parent_key"], "JVL-10")
 
     def test_sca_subtask_without_cve_is_skipped_not_fatal(self):
         description = (
@@ -88,7 +90,8 @@ class TestParseJiraIssue(unittest.TestCase):
             }
         )
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].ticket_key, "JVL-11")
+        self.assertEqual(jobs[0].ticket_key, "JVL-10")  # parent, not the subtask
+        self.assertEqual(jobs[0].jira_meta["subtask_key"], "JVL-11")
 
     def test_sca_ticket_all_subtasks_without_cve_raises(self):
         description = (
@@ -114,6 +117,7 @@ class TestParseJiraIssue(unittest.TestCase):
         for j in jobs:
             self.assertEqual(j.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
             self.assertEqual(j.jira_meta["package_name_version"], "log4j-core 2.14.1")
+            self.assertEqual(j.ticket_key, "JVL-10")  # parent, not the subtask
 
     def test_sca_subtasks_flat_shape_from_real_automation_rule(self):
         # "SCA | CVE-..." is the real subtask summary format (verified);
@@ -136,6 +140,8 @@ class TestParseJiraIssue(unittest.TestCase):
         self.assertEqual(jobs[0].cve_id, "CVE-2025-71329")
         self.assertEqual(jobs[0].scan_id, "22222222-2222-2222-2222-222222222222")
         self.assertEqual(jobs[0].jira_meta["package_name_version"], "log4j-core 2.14.1")
+        self.assertEqual(jobs[0].ticket_key, "JVL-10")  # parent, not the subtask
+        self.assertEqual(jobs[0].jira_meta["subtask_key"], "JVL-11")
 
     def test_sca_subtask_without_package_field_has_no_package_in_jira_meta(self):
         jobs = parse_jira_issue(

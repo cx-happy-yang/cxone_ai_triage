@@ -1,5 +1,15 @@
 """Render a completed AiTriageResult into a single Jira-wiki-markup paragraph,
-suitable for posting as a comment on the originating ticket/subtask.
+suitable for posting as a comment on the originating ticket.
+
+Comments always go on the parent ticket, never a subtask (see
+pipeline.run_pipeline) — for SAST that's already the ticket the
+VulnerabilityId field lives on, but for SCA it means every subtask's CVE
+gets commented onto their shared parent instead of its own subtask. Since
+that means multiple comments can land on one ticket, each comment leads
+with which specific vulnerability it's about: "Vulnerability ID" (matching
+the ticket's VulnerabilityIdN field name) for SAST, "CVE ID" for SCA — see
+vulnerability_label_name/vulnerability_label. subtask_key additionally
+cross-references the originating subtask for SCA.
 
 Uses every field on AiTriageResult (see CheckmarxPythonSDK.CxOne.dto):
 triageStatus, reachabilityStatus/exploitabilityStatus/attackabilityStatus,
@@ -8,20 +18,46 @@ usage_locations), metadata (SCA component/version), reasoningTrace
 (verification steps + repository info), scanner/resultID/triagedAt, and
 flags a mockOrigin result as a placeholder rather than a live verdict.
 
-For SCA, also takes the package name/version straight from the originating
-Jira subtask (TriageJob.jira_meta["package_name_version"], via a "Package
-Name/Version" custom field — see docs/jira-automation-setup.md) rather than
-relying solely on AiTriageResult.metadata.component/.version, since CxOne
-doesn't always populate that.
+For SCA, also takes the package name/version from the ticket-level
+"Package Name/Version" custom field (TriageJob.jira_meta["package_name_version"]
+— see docs/jira-automation-setup.md) rather than relying solely on
+AiTriageResult.metadata.component/.version, since CxOne doesn't always
+populate that.
 """
 from typing import List, Optional
 
 from CheckmarxPythonSDK.CxOne.dto import AiTriageResult
 
 
-def format_comment(result: AiTriageResult, package_name_version: Optional[str] = None) -> str:
-    """Build one paragraph (sentence per field group, joined with spaces)."""
+def format_comment(
+    result: AiTriageResult,
+    package_name_version: Optional[str] = None,
+    vulnerability_label: Optional[str] = None,
+    vulnerability_label_name: str = "Vulnerability ID",
+    subtask_key: Optional[str] = None,
+) -> str:
+    """Build one paragraph (sentence per field group, joined with spaces).
+
+    Args:
+        result: The finished AiTriageResult to render.
+        package_name_version: SCA only — from the ticket's "Package Name/
+            Version" custom field.
+        vulnerability_label: What this specific result is (the CVE ID for
+            SCA, the resultHash/pathSystemId for SAST) — identifies this
+            comment among others that may land on the same parent ticket.
+        vulnerability_label_name: The label to show it under — pass "CVE ID"
+            for SCA; defaults to "Vulnerability ID" (matching the ticket's
+            VulnerabilityIdN field name) for SAST.
+        subtask_key: SCA only — the originating subtask's key, if this job
+            came from one, for cross-reference even though the comment
+            itself is posted on the parent.
+    """
     parts: List[str] = []
+
+    if vulnerability_label:
+        parts.append(f"*{vulnerability_label_name}:* {vulnerability_label}.")
+    if subtask_key:
+        parts.append(f"*Subtask:* {subtask_key}.")
 
     if result.mockOrigin:
         parts.append(

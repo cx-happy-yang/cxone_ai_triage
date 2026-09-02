@@ -26,9 +26,12 @@ checked in this order:
      instead of one request per result — see "Batching" below.
    - `subtasks` — for SCA, each CVE lives on a subtask's summary line (e.g.
      `"SCA | CVE-2025-71329"`), not a VulnerabilityId field. One triage job
-     per subtask that has a CVE in its summary, using the *subtask's own
-     key* (not the parent's) so the AI Triage comment lands on the right
-     subtask; subtasks without a CVE are skipped with a warning, not fatal.
+     per subtask that has a CVE in its summary; the Jira comment for each
+     always goes on the **parent ticket key**, not the subtask (Jira
+     comments belong on the parent for both SAST and SCA) — the subtask key
+     and CVE are included in the comment body so multiple CVEs commented on
+     one parent ticket stay distinguishable. Subtasks without a CVE are
+     skipped with a warning, not fatal.
    - `packageNameVersion` — a custom field **on the parent ticket** (not
      per-subtask), applied to every CVE/subtask under it: the expected
      structure is one package per ticket, with each of its CVEs as a
@@ -109,11 +112,16 @@ until `triageStatus` leaves `NOT_TRIAGED`/`IN_PROGRESS` (or times out —
 (`AiTriageResult`: verdict, reachability + reasoning, exploitability +
 reasoning, attackability, confidence score + explanation, usage locations,
 SCA component/version, verification steps, repository info, scanner/result/
-triagedAt) — plus, for SCA, the package name/version straight from the
-originating Jira subtask (`jira_meta["package_name_version"]`, since CxOne
-doesn't always populate `metadata.component`/`.version`) — into one
-paragraph (`comment_formatter.format_comment`) and posts it as a comment on
-the originating ticket/subtask key via `jira_client.py`.
+triagedAt) — plus, for SCA, the package name/version from the ticket-level
+`packageNameVersion` field (`jira_meta["package_name_version"]`, since CxOne
+doesn't always populate `metadata.component`/`.version`), and (for jobs
+resolved from a subtask) the CVE and subtask key so the comment stays
+attributable — into one paragraph (`comment_formatter.format_comment`) and
+posts it as a comment on **the parent ticket key** (`job.ticket_key`) via
+`jira_client.py`. This holds for both SAST and SCA: even when a ticket has
+several results (multiple `VulnerabilityId`s, or multiple SCA subtasks),
+every one of their comments lands on that one parent ticket, not on a
+subtask.
 
 A failure at either step (timeout polling, or the Jira API call itself)
 is recorded on the output row (`poll_error` / `comment_error`) but never

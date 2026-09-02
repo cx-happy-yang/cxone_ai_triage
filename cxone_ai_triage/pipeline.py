@@ -4,9 +4,12 @@ into one trigger request each) -> poll each result -> post it as a Jira
 comment (JiraCommentClient). Kept separate from TriageResolver so the
 CxOne-only resolution logic stays testable without any Jira dependency.
 
-Polling and commenting stay per-job even when triggering was batched: each
-result has its own distinct groupId to poll, and (for SCA) its own subtask
-to comment on.
+Polling stays per-job even when triggering was batched, since each result
+has its own distinct groupId to poll. Commenting also stays per-job, but
+always targets the parent ticket key (job.ticket_key) — never a subtask,
+even for SCA jobs resolved from one — so a ticket with several results
+(multiple VulnerabilityIds, or multiple SCA subtasks) gets one comment per
+result, all on that one parent ticket.
 """
 import logging
 from typing import List, Optional
@@ -74,8 +77,14 @@ def run_pipeline(
 
         try:
             comment = format_comment(
-                result, package_name_version=job.jira_meta.get("package_name_version")
+                result,
+                package_name_version=job.jira_meta.get("package_name_version"),
+                vulnerability_label=job.cve_id if job.scanner_type == "sca" else job.result_hash,
+                vulnerability_label_name="CVE ID" if job.scanner_type == "sca" else "Vulnerability ID",
+                subtask_key=job.jira_meta.get("subtask_key"),
             )
+            # Always the parent ticket key (job.ticket_key) - never a
+            # subtask, even when this job was resolved from one.
             jira_client.add_comment(job.ticket_key, comment)
             outcome.comment_posted = True
         except Exception as e:  # noqa: BLE001 - best-effort, don't abort the batch
