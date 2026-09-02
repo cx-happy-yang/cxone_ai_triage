@@ -40,9 +40,12 @@ class TestParseJiraIssue(unittest.TestCase):
             r"*Scan ID:* [x|https://x/scans?id=22222222-2222-2222-2222-222222222222&branch=main]" "\n"
             "Package log4j-core is affected by CVE-2021-44228."
         )
-        jobs = parse_jira_issue({"key": "PRUD-9", "description": description})
+        jobs = parse_jira_issue(
+            {"key": "PRUD-9", "description": description, "packageNameVersion": "log4j-core 2.14.1"}
+        )
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
+        self.assertEqual(job.jira_meta["package_name_version"], "log4j-core 2.14.1")
         self.assertEqual(job.scanner_type, "sca")
         self.assertEqual(job.scan_id, "22222222-2222-2222-2222-222222222222")
         self.assertEqual(job.cve_id, "CVE-2021-44228")
@@ -114,17 +117,18 @@ class TestParseJiraIssue(unittest.TestCase):
 
     def test_sca_subtasks_flat_shape_from_real_automation_rule(self):
         # "SCA | CVE-..." is the real subtask summary format (verified);
-        # note the package is NOT in the summary, only in its own field.
+        # packageNameVersion is a field on the *parent* ticket (verified),
+        # not per-subtask, and applies to every CVE/subtask under it.
         jobs = parse_jira_issue(
             {
                 "key": "JVL-10",
                 "description": r"*Checkmarx \(SCA\):* Vulnerable Open Source Dependencies",
                 "scanId": "22222222-2222-2222-2222-222222222222",
+                "packageNameVersion": "log4j-core 2.14.1",
                 "subtasks": [
                     {"key": "JVL-11", "summary": "SCA | CVE-2025-71329",
                      "status": "To Do", "assignee": "dev@example.com",
-                     "created": "2026-08-20T09:16:00.000-0000", "url": "https://x/browse/JVL-11",
-                     "package": "log4j-core 2.14.1"},
+                     "created": "2026-08-20T09:16:00.000-0000", "url": "https://x/browse/JVL-11"},
                 ],
             }
         )

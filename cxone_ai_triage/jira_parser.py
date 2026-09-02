@@ -7,9 +7,9 @@ docs/jira-automation-setup.md for the automation rule itself.
 The Jira Automation "send web request" action posts client_payload.jira_issue
 with: key, summary, description, status, priority, issue_type, project,
 reporter, assignee, labels, url, created, updated, subtasks, scanId,
-VulnerabilityId1..VulnerabilityId5. The non-identifier fields are carried
-straight through as jira_meta for traceability in the output report (see
-TriageJob.jira_meta).
+VulnerabilityId1..VulnerabilityId5, packageNameVersion. The non-identifier
+fields are carried straight through as jira_meta for traceability in the
+output report (see TriageJob.jira_meta).
 
 Scan ID: prefers jira_issue["scanId"] (a custom field); falls back to
 regex-extracting the `scans?id=` link in the description if that's absent
@@ -24,16 +24,19 @@ the description if none of the five are set (verified against the same real
 ticket: `.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D`).
 
 SCA CVE identifier(s): each CVE lives on a *subtask*'s summary line, e.g.
-"SCA | CVE-2025-71329" — not a VulnerabilityId field, and not accompanied by
-the package name/version (verified against a real subtask summary). The
-parent's `subtasks` array (built by the automation's Create Variable action)
-is a flat `{"key": ..., "summary": ..., "status": ..., "assignee": ...,
-"created": ..., "url": ..., "package": ...}` per subtask, where `package`
-is a "Package Name/Version" custom field on the subtask (added specifically
-so the AI Triage comment can report which package/version a CVE applies to
-— see docs/jira-automation-setup.md). A ticket with no `subtasks` field
-falls back to scanning the parent description directly for a CVE ID (no
-package name/version is available on that fallback path).
+"SCA | CVE-2025-71329" — not a VulnerabilityId field. The parent's
+`subtasks` array (built by the automation's Create Variable action) is a
+flat `{"key": ..., "summary": ..., "status": ..., "assignee": ..., "created":
+..., "url": ...}` per subtask. A ticket with no `subtasks` field falls back
+to scanning the parent description directly for a CVE ID.
+
+SCA package name/version: `jira_issue["packageNameVersion"]` is a custom
+field on the *parent ticket* (verified — not per-subtask), applied to every
+CVE/subtask under that ticket. This is how a ticket is expected to be
+structured: one package per ticket, with each of its CVEs as a subtask.
+Reported in the AI Triage Jira comment (see comment_formatter.py) since
+CxOne's own AiTriageResult.metadata.component/.version isn't always
+populated.
 """
 import logging
 import re
@@ -92,7 +95,10 @@ def parse_jira_issue(jira_issue: dict) -> List[TriageJob]:
     if scanner_type == "sast":
         return _parse_sast(ticket_key, scan_id, description, jira_meta, jira_issue)
     if scanner_type == "sca":
-        return _parse_sca(ticket_key, scan_id, description, jira_meta, jira_issue.get("subtasks"))
+        return _parse_sca(
+            ticket_key, scan_id, description, jira_meta,
+            jira_issue.get("subtasks"), jira_issue.get("packageNameVersion"),
+        )
     raise ValueError(f"{ticket_key}: unsupported scanner type {scanner_type!r} for AI Triage")
 
 
@@ -138,14 +144,21 @@ def _parse_sca(
     description: str,
     jira_meta: dict,
     subtasks: Optional[list],
+    package_name_version: Optional[str],
 ) -> List[TriageJob]:
     if subtasks:
-        return _parse_sca_subtasks(ticket_key, scan_id, jira_meta, subtasks)
-    return _parse_sca_description_fallback(ticket_key, scan_id, description, jira_meta)
+        return _parse_sca_subtasks(ticket_key, scan_id, jira_meta, subtasks, package_name_version)
+    return _parse_sca_description_fallback(
+        ticket_key, scan_id, description, jira_meta, package_name_version
+    )
 
 
 def _parse_sca_subtasks(
-    ticket_key: Optional[str], scan_id: str, jira_meta: dict, subtasks: list
+    ticket_key: Optional[str],
+    scan_id: str,
+    jira_meta: dict,
+    subtasks: list,
+    package_name_version: Optional[str],
 ) -> List[TriageJob]:
     jobs = []
     for subtask in subtasks:
@@ -169,9 +182,8 @@ def _parse_sca_subtasks(
         meta = dict(jira_meta)
         meta["parent_key"] = ticket_key
         meta["subtask_summary"] = summary
-        package = fields.get("package")
-        if package:
-            meta["package_name_version"] = package
+        if package_name_version:
+            meta["package_name_version"] = package_name_version
         jobs.append(
             TriageJob(
                 scan_id=scan_id,
@@ -190,17 +202,23 @@ def _parse_sca_subtasks(
 
 
 def _parse_sca_description_fallback(
-    ticket_key: Optional[str], scan_id: str, description: str, jira_meta: dict
+    ticket_key: Optional[str],
+    scan_id: str,
+    description: str,
+    jira_meta: dict,
+    package_name_version: Optional[str],
 ) -> List[TriageJob]:
     cve_ids = list(dict.fromkeys(m.upper() for m in _CVE_RE.findall(description)))
     if not cve_ids:
         raise ValueError(
             f"{ticket_key}: no subtasks and no CVE ID in the ticket description"
         )
-    return [
-        TriageJob(
-            scan_id=scan_id, scanner_type="sca", ticket_key=ticket_key, cve_id=cve,
-            jira_meta=dict(jira_meta),
+    jobs = []
+    for cve in cve_ids:
+        meta = dict(jira_meta)
+        if package_name_version:
+            meta["package_name_version"] = package_name_version
+        jobs.append(
+            TriageJob(scan_id=scan_id, scanner_type="sca", ticket_key=ticket_key, cve_id=cve, jira_meta=meta)
         )
-        for cve in cve_ids
-    ]
+    return jobs

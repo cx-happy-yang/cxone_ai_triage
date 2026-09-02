@@ -22,13 +22,14 @@ checked in this order:
      is populated per ticket); one triage job is created per populated
      field, all on the parent ticket key.
    - `subtasks` — for SCA, each CVE lives on a subtask's summary line (e.g.
-     `"SCA | CVE-2025-71329"`), not a VulnerabilityId field. Each subtask's
-     `package` field (a "Package Name/Version" custom field, since the
-     package isn't in the summary) is carried into the output report and
-     the AI Triage Jira comment. One triage job per subtask that has a CVE
-     in its summary, using the *subtask's own key* (not the parent's) so
-     the AI Triage comment lands on the right subtask; subtasks without a
-     CVE are skipped with a warning, not fatal.
+     `"SCA | CVE-2025-71329"`), not a VulnerabilityId field. One triage job
+     per subtask that has a CVE in its summary, using the *subtask's own
+     key* (not the parent's) so the AI Triage comment lands on the right
+     subtask; subtasks without a CVE are skipped with a warning, not fatal.
+   - `packageNameVersion` — a custom field **on the parent ticket** (not
+     per-subtask), applied to every CVE/subtask under it: the expected
+     structure is one package per ticket, with each of its CVEs as a
+     subtask. Carried into the output report and the AI Triage Jira comment.
 2. **The ticket's free-text `description`** (Jira wiki markup produced by
    the Checkmarx Jira integration), used as a fallback whenever the field
    above is absent — e.g. for tickets predating this automation rule, or a
