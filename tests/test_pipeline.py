@@ -29,11 +29,16 @@ class FakeResolver:
 
 
 class FakeJiraClient:
-    def __init__(self):
+    def __init__(self, existing_bodies_by_issue=None):
         self.comments = []
+        self._existing_bodies_by_issue = existing_bodies_by_issue or {}
 
     def add_comment(self, issue_key, body):
         self.comments.append((issue_key, body))
+        self._existing_bodies_by_issue.setdefault(issue_key, []).append(body)
+
+    def get_comment_bodies(self, issue_key):
+        return list(self._existing_bodies_by_issue.get(issue_key, []))
 
 
 def make_accepted_outcome(job, project_id="proj-1", group_id="group-1"):
@@ -114,6 +119,73 @@ class TestRunPipeline(unittest.TestCase):
         issue_key, comment = jira_client.comments[0]
         self.assertEqual(issue_key, "JVL-2")
         self.assertIn("*Vulnerability ID:* hash-xyz.", comment)
+
+    def test_skips_posting_a_duplicate_comment_for_the_same_vulnerability(self):
+        job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+        jira_client = FakeJiraClient(
+            existing_bodies_by_issue={"JVL-2": ["*Vulnerability ID:* hash-xyz. *CxOne AI Triage verdict:* VULNERABLE."]}
+        )
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(jira_client.comments, [])  # no new comment posted
+        self.assertFalse(outcomes[0].comment_posted)
+        self.assertIn("hash-xyz", outcomes[0].comment_skipped_reason)
+
+    def test_posts_normally_when_existing_comments_are_for_a_different_vulnerability(self):
+        job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+        jira_client = FakeJiraClient(
+            existing_bodies_by_issue={"JVL-2": ["*Vulnerability ID:* some-other-hash. *CxOne AI Triage verdict:* VULNERABLE."]}
+        )
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(len(jira_client.comments), 1)
+        self.assertTrue(outcomes[0].comment_posted)
+        self.assertIsNone(outcomes[0].comment_skipped_reason)
+
+    def test_second_job_in_the_same_run_sees_the_first_jobs_freshly_posted_comment(self):
+        # Two SAST results on the same parent ticket - the marker check for
+        # job 2 must see job 1's comment even though it was only just posted
+        # moments earlier in this same run, not from an earlier run.
+        job1 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-one")
+        job2 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-one")  # duplicate on purpose
+        outcome1 = make_accepted_outcome(job1, group_id="group-1")
+        outcome2 = make_accepted_outcome(job2, group_id="group-1")
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome1}, poll_result=result)
+        resolver.resolve_and_trigger_all = lambda jobs: [outcome1, outcome2]
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job1, job2], resolver, jira_client)
+
+        self.assertEqual(len(jira_client.comments), 1)  # only the first posted
+        self.assertTrue(outcomes[0].comment_posted)
+        self.assertFalse(outcomes[1].comment_posted)
+        self.assertIsNotNone(outcomes[1].comment_skipped_reason)
+
+    def test_posts_normally_when_existing_comment_check_fails(self):
+        job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome}, poll_result=result)
+
+        class BrokenReadJiraClient(FakeJiraClient):
+            def get_comment_bodies(self, issue_key):
+                raise RuntimeError("503 Service Unavailable")
+
+        jira_client = BrokenReadJiraClient()
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(len(jira_client.comments), 1)  # still posted - fails open
+        self.assertTrue(outcomes[0].comment_posted)
 
     def test_failed_trigger_skips_poll_and_comment(self):
         job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="h1")

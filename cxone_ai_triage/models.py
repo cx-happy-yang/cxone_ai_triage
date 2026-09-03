@@ -62,7 +62,9 @@ class TriageOutcome:
     (see pipeline.run_pipeline). trigger_skipped_reason is set instead of
     triage_id when an existing AI Triage result was found before triggering
     and the trigger call was skipped entirely (see
-    TriageResolver._check_existing_triage).
+    TriageResolver._check_existing_triage). comment_skipped_reason is set
+    instead of comment_posted when the ticket already had a comment for
+    this same vulnerability (see pipeline.run_pipeline's duplicate check).
     """
 
     job: TriageJob
@@ -83,6 +85,7 @@ class TriageOutcome:
     poll_error: Optional[str] = None
     comment_posted: bool = False
     comment_error: Optional[str] = None
+    comment_skipped_reason: Optional[str] = None
 
     def to_row(self) -> dict:
         row = {
@@ -108,6 +111,7 @@ class TriageOutcome:
             "poll_error": self.poll_error,
             "comment_posted": self.comment_posted,
             "comment_error": self.comment_error,
+            "comment_skipped_reason": self.comment_skipped_reason,
         }
         for key, value in self.job.jira_meta.items():
             row[f"jira_{key}"] = value

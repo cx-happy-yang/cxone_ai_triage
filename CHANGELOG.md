@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Before posting a Jira comment, `pipeline.py` now checks the ticket's
+  existing comments for the same `"*Vulnerability ID:*"`/`"*CVE ID:*"`
+  marker `format_comment` leads with, and skips posting
+  (`outcome.comment_skipped_reason` set) if one's already there instead of
+  adding a duplicate. Covers both re-running the same ticket and multiple
+  results landing on the same parent ticket within one run. A failed check
+  fails open (posts as usual).
+
 ## [0.2.3]
 
 ### Changed

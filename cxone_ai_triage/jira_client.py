@@ -9,7 +9,7 @@ as {"body": body} with no ADF conversion.
 """
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 from jira import JIRA
 
@@ -18,8 +18,8 @@ logger = logging.getLogger("cxone_ai_triage")
 
 class JiraCommentClient:
     """Thin wrapper around the `jira` package, scoped to what this tool
-    needs: posting one comment on an issue (a ticket or a subtask key both
-    work identically)."""
+    needs: reading and posting comments on an issue (a ticket or a subtask
+    key both work identically)."""
 
     def __init__(self, server: str, email: str, api_token: str):
         self._client = JIRA(server=server, basic_auth=(email, api_token))
@@ -27,6 +27,11 @@ class JiraCommentClient:
     def add_comment(self, issue_key: str, body: str) -> None:
         self._client.add_comment(issue_key, body)
         logger.info("Posted AI Triage comment to %s", issue_key)
+
+    def get_comment_bodies(self, issue_key: str) -> List[str]:
+        """Every existing comment's body text on this issue, for checking
+        before posting a new one (see pipeline.py's duplicate check)."""
+        return [c.body for c in self._client.comments(issue_key) if getattr(c, "body", None)]
 
 
 def build_jira_client_from_env() -> Optional[JiraCommentClient]:
