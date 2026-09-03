@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.5]
 
 ### Fixed
 - `_resolve_group_id` no longer requires an exact `scanId` match against

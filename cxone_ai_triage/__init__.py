@@ -2,4 +2,4 @@
 Checkmarx One AI Triage requests and trigger them via CheckmarxPythonSDK.
 """
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
