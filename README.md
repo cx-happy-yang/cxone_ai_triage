@@ -80,6 +80,17 @@ exact format isn't documented anywhere in the SDK or API. `GET /api/risks`
 returns the real `groupId` directly, so this tool uses that instead of
 guessing a delimiter/order.
 
+`GET /api/risks` (per its own docstring) aggregates risks at the *project*
+level, not per scan — `Risk.scanId` reflects some scan that detected it,
+not necessarily the scan_id on the ticket, and was observed live to drift
+to a different scan once the project had been rescanned since the ticket
+was filed. So a `scanId` match is only used as a *preference* for picking
+the right risk when several share the same CVE (falling back to
+`package_identifier` matched against `assetName` if still ambiguous),
+never as a hard filter — an exact-`scanId`-only match would have wrongly
+discarded the only real candidate and left `groupId` blank for an already-
+triaged CVE.
+
 `GET /api/results` has no `similarityId` filter, so every row for a scan is
 paged through (500 at a time) and cached per scan — unavoidable, but paid
 once per scan even across many ticket rows in the same batch.

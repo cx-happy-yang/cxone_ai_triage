@@ -18,7 +18,10 @@ not for the trigger call itself) is resolved as:
   - SCA: looked up from GET /api/risks rather than hand-built, since the
     "similarityId+packageIdentifier+projectId" concatenation format isn't
     documented anywhere in the SDK/API and /api/risks returns the
-    authoritative value directly.
+    authoritative value directly. /api/risks aggregates at the *project*
+    level, not per scan, so a scanId match is only used to disambiguate
+    between several risks sharing one CVE - never as a hard filter that
+    could discard the only match (see _resolve_group_id).
 
 Batching: resultID resolution (similarityId -> alternateId, groupId, ...) is
 always per-job, since each result has its own distinct groupId to poll
@@ -204,18 +207,47 @@ class TriageResolver:
         resp = self._risks_api.get_risks(
             project_id=project_id, engine=["SCA"], risk_name=[job.cve_id], limit=200
         )
-        candidates = [r for r in resp.risks if r.scanId == job.scan_id]
+        candidates = resp.risks
         if not candidates:
             logger.warning(
-                "GET /api/risks has no entry for CVE %s on scan %s (project %s); "
+                "GET /api/risks has no entry at all for CVE %s in project %s; "
                 "groupId left blank (does not block the trigger call).",
-                job.cve_id, job.scan_id, project_id,
+                job.cve_id, project_id,
             )
             return None
+
+        # GET /api/risks aggregates risks at the *project* level (per its
+        # own docstring), not per scan - Risk.scanId reflects some scan
+        # that detected it (observed live to drift to whatever scan most
+        # recently rediscovered it), not necessarily job.scan_id. A live
+        # tenant returned zero candidates for a CVE that was confirmed to
+        # already exist, once the project had been rescanned since the
+        # ticket's scan_id - so an exact scanId match is only a
+        # *preference* for picking the right one when several risks share
+        # this CVE, never a hard requirement that discards every result.
+        scan_matches = [r for r in candidates if r.scanId == job.scan_id]
+        if scan_matches:
+            candidates = scan_matches
+        else:
+            logger.info(
+                "GET /api/risks returned %d entr%s for CVE %s in project %s but none tagged "
+                "with scan %s (risks are project-level, not scan-level - using them anyway).",
+                len(candidates), "y" if len(candidates) == 1 else "ies",
+                job.cve_id, project_id, job.scan_id,
+            )
+
+        if job.package_identifier and len(candidates) > 1:
+            narrowed = [
+                r for r in candidates
+                if r.assetName and job.package_identifier in r.assetName
+            ]
+            if narrowed:
+                candidates = narrowed
+
         if len(candidates) > 1:
             logger.warning(
-                "GET /api/risks returned %d entries for CVE %s on scan %s; using the first",
-                len(candidates), job.cve_id, job.scan_id,
+                "GET /api/risks returned %d entries for CVE %s in project %s; using the first",
+                len(candidates), job.cve_id, project_id,
             )
         return candidates[0].groupId
 

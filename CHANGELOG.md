@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `_resolve_group_id` no longer requires an exact `scanId` match against
+  `GET /api/risks` results for SCA jobs. That endpoint aggregates risks at
+  the *project* level (per its own docstring), not per scan, so `Risk.scanId`
+  can drift to whatever scan most recently detected the risk. Live testing
+  with multiple SCA CVEs on one ticket showed a CVE that was confirmed to
+  already be AI-triaged come back with zero candidates and `groupId` left
+  blank, because the project had been rescanned since the ticket's scan_id.
+  A `scanId` match is now only a preference for disambiguating between
+  several risks sharing the same CVE (falling back to `package_identifier`
+  matched against `assetName`), never a hard filter that can discard the
+  only real match.
+
 ## [0.2.4]
 
 ### Added
