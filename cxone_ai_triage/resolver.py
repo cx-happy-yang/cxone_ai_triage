@@ -35,12 +35,18 @@ finished — the trigger is skipped for that job entirely (outcome.
 trigger_skipped_reason is set instead) rather than re-submitting it; the
 pipeline's subsequent poll picks up the existing result either way (an
 already-terminal result returns on the poll's first call, no waiting).
+
+All five SDK API classes share one ApiClient (and so one OAuth token/
+TokenManager) rather than each building its own — confirmed via live logs
+that letting each construct its own via construct_configuration() means a
+separate token fetch per class actually used in a run.
 """
 import logging
 import time
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
+from CheckmarxPythonSDK.api_client import ApiClient
 from CheckmarxPythonSDK.CxOne import (
     AiTriageAPI,
     RiskOrchestrationAPI,
@@ -48,6 +54,7 @@ from CheckmarxPythonSDK.CxOne import (
     ScannersResultsAPI,
     ScansAPI,
 )
+from CheckmarxPythonSDK.CxOne.config import construct_configuration
 from CheckmarxPythonSDK.CxOne.dto import AiTriageRequest, AiTriageResult, TriageBucket
 
 from .models import TriageJob, TriageOutcome
@@ -73,12 +80,19 @@ class TriageResolver:
     at the same scan only pays the /api/results pagination cost once.
     """
 
-    def __init__(self):
-        self._scans_api = ScansAPI()
-        self._sast_results_api = SastResultsAPI()
-        self._scanner_results_api = ScannersResultsAPI()
-        self._risks_api = RiskOrchestrationAPI()
-        self._ai_triage_api = AiTriageAPI()
+    def __init__(self, api_client: Optional[ApiClient] = None):
+        # One shared ApiClient (and so one shared token/TokenManager) across
+        # all five SDK classes, instead of each building its own via
+        # construct_configuration() — confirmed via live logs that letting
+        # each construct its own means a separate OAuth token fetch per
+        # class actually used (up to 4-5 per run).
+        if api_client is None:
+            api_client = ApiClient(configuration=construct_configuration())
+        self._scans_api = ScansAPI(api_client=api_client)
+        self._sast_results_api = SastResultsAPI(api_client=api_client)
+        self._scanner_results_api = ScannersResultsAPI(api_client=api_client)
+        self._risks_api = RiskOrchestrationAPI(api_client=api_client)
+        self._ai_triage_api = AiTriageAPI(api_client=api_client)
 
         self._project_id_by_scan: Dict[str, str] = {}
         self._results_by_scan: Dict[str, list] = {}

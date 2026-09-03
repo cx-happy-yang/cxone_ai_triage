@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+- `TriageResolver` now builds one shared `ApiClient` (and so one OAuth
+  token) and passes it into all five `CheckmarxPythonSDK.CxOne` classes it
+  uses, instead of letting each build its own via `construct_configuration()`.
+  Live logs showed the latter fetching a separate token per class actually
+  used in a run (up to 4–5 extra round-trips).
+  
 ### Fixed
 - Hardened `_check_existing_triage`'s status check (added in 0.2.2). Live
   testing showed a real tenant returning `CONFIRMED` — a SAST/SCA result
