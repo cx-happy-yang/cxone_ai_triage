@@ -29,6 +29,15 @@ from typing import List, Optional
 from CheckmarxPythonSDK.CxOne.dto import AiTriageResult
 
 
+def build_vulnerability_marker(vulnerability_label_name: str, vulnerability_label: str) -> str:
+    """The leading "*Vulnerability ID:* <value>." / "*CVE ID:* <value>."
+    clause format_comment always starts with when given a label. Exposed
+    separately so pipeline.py can check existing Jira comments for this
+    exact marker before posting a new one, without duplicating the format
+    string (and risking it drifting out of sync with format_comment)."""
+    return f"*{vulnerability_label_name}:* {vulnerability_label}."
+
+
 def format_comment(
     result: AiTriageResult,
     package_name_version: Optional[str] = None,
@@ -55,7 +64,7 @@ def format_comment(
     parts: List[str] = []
 
     if vulnerability_label:
-        parts.append(f"*{vulnerability_label_name}:* {vulnerability_label}.")
+        parts.append(build_vulnerability_marker(vulnerability_label_name, vulnerability_label))
     if subtask_key:
         parts.append(f"*Subtask:* {subtask_key}.")
 

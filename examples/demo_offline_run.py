@@ -12,6 +12,11 @@ setup): JVL-2 is SAST with VulnerabilityId1 + VulnerabilityId2 populated
 per-subtask comments). All four results get DIFFERENT verdicts on purpose,
 to show format_comment handles the full range and that each result gets
 its own tailored Jira comment -- not one merged comment per ticket/batch.
+
+Step 4 re-runs the same jobs (simulating a retry/re-dispatch) and asserts
+zero new POST /api/ai-triage/triage calls (the existing-triage check) and
+zero new Jira comments (the duplicate-comment check, matched by the
+"*Vulnerability ID:*"/"*CVE ID:*" marker each comment leads with).
 """
 import logging
 import sys
@@ -269,15 +274,24 @@ def install_fakes(resolver: TriageResolver) -> None:
 
 
 class FakeJiraClient:
-    """Logs what would be posted instead of calling the real Jira API."""
+    """Logs what would be posted instead of calling the real Jira API, and
+    tracks bodies per issue so the pipeline's duplicate-comment check (see
+    pipeline.py) behaves like a real Jira instance across the demo's re-run
+    in Step 4."""
 
     def __init__(self):
         self.comments = []
+        self._bodies_by_issue = {}
 
     def add_comment(self, issue_key, body):
         self.comments.append((issue_key, body))
+        self._bodies_by_issue.setdefault(issue_key, []).append(body)
         fake_logger.info("[FAKE] POST /rest/api/2/issue/%s/comment", issue_key)
         fake_logger.info("[FAKE]   body: %s", body)
+
+    def get_comment_bodies(self, issue_key):
+        fake_logger.info("[FAKE] GET /rest/api/2/issue/%s/comment", issue_key)
+        return list(self._bodies_by_issue.get(issue_key, []))
 
 
 # ---------------------------------------------------------------------------
@@ -318,22 +332,27 @@ def main():
 
     logger.info(
         "=== Step 4: re-run the same jobs (simulating a retry/re-dispatch) — "
-        "expect every trigger to be skipped this time ==="
+        "expect every trigger AND every comment to be skipped this time ==="
     )
     rerun_outcomes = run_pipeline(jobs, resolver, jira_client, poll=True, post_comment=True)
     for o in rerun_outcomes:
         logger.info(
-            "%s  cve/hash=%s  status=%s  triggerSkipped=%s  commentPosted=%s",
+            "%s  cve/hash=%s  status=%s  triggerSkipped=%s  commentPosted=%s  commentSkipped=%s",
             o.job.ticket_key, o.job.cve_id or o.job.result_hash,
             o.status, bool(o.trigger_skipped_reason), o.comment_posted,
+            bool(o.comment_skipped_reason),
         )
     assert all(o.trigger_skipped_reason for o in rerun_outcomes), (
         "expected every re-run outcome to skip triggering"
     )
-    assert len(jira_client.comments) == 8, "expected 4 more comments posted on the re-run"
+    assert all(o.comment_skipped_reason for o in rerun_outcomes), (
+        "expected every re-run outcome to skip commenting (duplicate detection)"
+    )
+    assert len(jira_client.comments) == 4, "expected no new comments posted on the re-run"
     logger.info(
-        "Re-run triggered 0 new POST /api/ai-triage/triage calls (all 4 results already "
-        "had one) and still posted 4 more comments (%d total) from the pre-existing results.",
+        "Re-run triggered 0 new POST /api/ai-triage/triage calls and posted 0 new "
+        "comments (still %d total from the first run) - the existing-triage check "
+        "avoided re-triggering, and the duplicate-comment check avoided re-posting.",
         len(jira_client.comments),
     )
 

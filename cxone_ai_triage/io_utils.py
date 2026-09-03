@@ -12,7 +12,7 @@ _OUTCOME_FIELDNAMES = [
     "group_id", "triage_id", "status", "error", "trigger_skipped_reason",
     "ai_triage_status", "reachability_status", "exploitability_status",
     "attackability_status", "ai_triage_summary", "poll_error",
-    "comment_posted", "comment_error",
+    "comment_posted", "comment_error", "comment_skipped_reason",
 ]
 
 

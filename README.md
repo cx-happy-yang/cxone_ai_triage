@@ -158,6 +158,21 @@ is recorded on the output row (`poll_error` / `comment_error`) but never
 flips an already-successful trigger back to "failed" — see
 `pipeline.run_pipeline`. Skip either step with `--no-poll` / `--no-comment`.
 
+### Avoiding duplicate comments
+
+Before posting, `pipeline.py` fetches the ticket's existing comments
+(`jira_client.get_comment_bodies`) and checks whether any of them already
+contain the same `"*Vulnerability ID:*"` / `"*CVE ID:*"` marker
+`format_comment` leads with (`comment_formatter.build_vulnerability_marker`
+— exposed separately so the check can't drift out of sync with what's
+actually posted). If one's already there, posting is skipped
+(`outcome.comment_skipped_reason` is set) instead of adding a duplicate.
+This covers both a re-run of the same ticket and multiple results landing
+on the same parent within one run — each job's check sees whatever the
+previous job in that same run already posted, since it re-fetches comments
+fresh each time. A failed check fails open (posts as usual) rather than
+blocking on this optimization.
+
 ## Install
 
 ```bash

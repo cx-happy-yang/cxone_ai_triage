@@ -10,11 +10,19 @@ always targets the parent ticket key (job.ticket_key) — never a subtask,
 even for SCA jobs resolved from one — so a ticket with several results
 (multiple VulnerabilityIds, or multiple SCA subtasks) gets one comment per
 result, all on that one parent ticket.
+
+Before posting, existing comments on that ticket are checked for the same
+"*Vulnerability ID:*"/"*CVE ID:*" marker format_comment always leads with
+(see comment_formatter.build_vulnerability_marker) — if one's already
+there, posting is skipped rather than adding a duplicate. This covers both
+a re-run of the same ticket and multiple results landing on the same
+parent within one run, since each job's check sees whatever the previous
+job in this same run already posted.
 """
 import logging
 from typing import List, Optional
 
-from .comment_formatter import format_comment
+from .comment_formatter import build_vulnerability_marker, format_comment
 from .jira_client import JiraCommentClient
 from .models import TriageJob, TriageOutcome
 from .resolver import DEFAULT_POLL_INTERVAL_SECONDS, DEFAULT_POLL_TIMEOUT_SECONDS, TriageResolver
@@ -75,12 +83,32 @@ def run_pipeline(
             )
             continue
 
+        vulnerability_label = job.cve_id if job.scanner_type == "sca" else job.result_hash
+        vulnerability_label_name = "CVE ID" if job.scanner_type == "sca" else "Vulnerability ID"
+
+        if vulnerability_label:
+            marker = build_vulnerability_marker(vulnerability_label_name, vulnerability_label)
+            try:
+                existing_bodies = jira_client.get_comment_bodies(job.ticket_key)
+            except Exception as e:  # noqa: BLE001 - fail open, post as usual
+                logger.debug(
+                    "%s: could not check existing comments (will post anyway): %s",
+                    job.ticket_key, e,
+                )
+                existing_bodies = []
+            if any(marker in body for body in existing_bodies):
+                outcome.comment_skipped_reason = f"duplicate: {job.ticket_key} already has a comment with {marker!r}"
+                logger.info(
+                    "%s: skipping comment, already has one for %s", job.ticket_key, marker
+                )
+                continue
+
         try:
             comment = format_comment(
                 result,
                 package_name_version=job.jira_meta.get("package_name_version"),
-                vulnerability_label=job.cve_id if job.scanner_type == "sca" else job.result_hash,
-                vulnerability_label_name="CVE ID" if job.scanner_type == "sca" else "Vulnerability ID",
+                vulnerability_label=vulnerability_label,
+                vulnerability_label_name=vulnerability_label_name,
                 subtask_key=job.jira_meta.get("subtask_key"),
             )
             # Always the parent ticket key (job.ticket_key) - never a

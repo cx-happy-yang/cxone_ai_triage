@@ -1,0 +1,102 @@
+INFO    demo: === Step 1: parse_jira_issue() on both tickets ===
+INFO    demo: JVL-2 (SAST)  -> 2 job(s): ['XZBiE9xWT5WiRxxnpMKmKfZUJuA=', 'N4mYQvKzX8pLr2sTuVwXyZ0abCd=']
+INFO    demo: JVL-10 (SCA)  -> 2 job(s): [('JVL-10', 'CVE-2021-44228'), ('JVL-10', 'CVE-2022-23305')]
+INFO    demo: === Step 2: run_pipeline() — resolve, batch-trigger, poll, comment ===
+INFO    demo.fake_api: [FAKE] GET /api/scans/d01d7561-2bf5-48b2-bbaa-da166c671fc3
+INFO    demo.fake_api: [FAKE] GET /api/sast-results?scan-id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&result-id=['XZBiE9xWT5WiRxxnpMKmKfZUJuA=']
+INFO    demo.fake_api: [FAKE] GET /api/results?scan-id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&offset=0&limit=500 -> 4 row(s)
+INFO    cxone_ai_triage: scan d01d7561-2bf5-48b2-bbaa-da166c671fc3: fetched 4 rows from /api/results
+INFO    demo.fake_api: [FAKE] GET /api/sast-results?scan-id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&result-id=['N4mYQvKzX8pLr2sTuVwXyZ0abCd=']
+INFO    demo.fake_api: [FAKE] GET /api/risks?projectId=1b49ad6f-057f-400c-aa32-f6bc31caf242&engine=['SCA']&riskName=CVE-2021-44228
+INFO    demo.fake_api: [FAKE] GET /api/risks?projectId=1b49ad6f-057f-400c-aa32-f6bc31caf242&engine=['SCA']&riskName=CVE-2022-23305
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/2621223299958738513
+INFO    demo.fake_api: [FAKE]   -> triageStatus=NOT_TRIAGED (nothing triggered yet)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/9988776655
+INFO    demo.fake_api: [FAKE]   -> triageStatus=NOT_TRIAGED (nothing triggered yet)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2021-44228
+INFO    demo.fake_api: [FAKE]   -> triageStatus=NOT_TRIAGED (nothing triggered yet)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2022-23305
+INFO    demo.fake_api: [FAKE]   -> triageStatus=NOT_TRIAGED (nothing triggered yet)
+INFO    demo.fake_api: [FAKE] POST /api/ai-triage/triage  scanID=d01d7561-2bf5-48b2-bbaa-da166c671fc3  scannerType=sast  resultIDs=['alt-sast-forum-sqli', 'alt-sast-login-sqli']
+INFO    demo.fake_api: [FAKE]   -> 202 Accepted, triageID=triage-batch-1
+INFO    demo.fake_api: [FAKE] POST /api/ai-triage/triage  scanID=d01d7561-2bf5-48b2-bbaa-da166c671fc3  scannerType=sca  resultIDs=['alt-sca-log4shell', 'alt-sca-log4j-2']
+INFO    demo.fake_api: [FAKE]   -> 202 Accepted, triageID=triage-batch-2
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/2621223299958738513
+INFO    demo.fake_api: [FAKE]   -> triageStatus=PROPOSED_NOT_EXPLOITABLE reachability=NOT_REACHABLE exploitability=NOT_EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-2/comment
+INFO    demo.fake_api: [FAKE] POST /rest/api/2/issue/JVL-2/comment
+INFO    demo.fake_api: [FAKE]   body: *Vulnerability ID:* XZBiE9xWT5WiRxxnpMKmKfZUJuA=. *CxOne AI Triage verdict:* PROPOSED_NOT_EXPLOITABLE. *Confidence:* 91/100 - Strong static evidence of parameterized query usage.. *Reachability:* NOT_REACHABLE - The vulnerable sink sits behind an admin-only code path never invoked from user input.. *Exploitability:* NOT_EXPLOITABLE - Input is bound via PreparedStatement parameters, not concatenated.. *Usage locations:* src/main/webapp/vulnerability/forum.jsp:48. *Summary:* The tainted input is fully sanitized via PreparedStatement before reaching the query. _(scanner: sast; result: r1; triaged at: 2026-09-02T10:00:00Z)_
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/9988776655
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-2/comment
+INFO    demo.fake_api: [FAKE] POST /rest/api/2/issue/JVL-2/comment
+INFO    demo.fake_api: [FAKE]   body: *Vulnerability ID:* N4mYQvKzX8pLr2sTuVwXyZ0abCd=. *CxOne AI Triage verdict:* VULNERABLE. *Confidence:* 95/100 - Direct unsanitized concatenation confirmed via data flow trace.. *Reachability:* REACHABLE - Endpoint is public and directly reachable from the login controller.. *Exploitability:* EXPLOITABLE - No input validation or escaping present before the query executes.. *Usage locations:* src/main/webapp/vulnerability/login.jsp:22. *Summary:* Untrusted request parameter flows directly into a raw SQL string without sanitization. _(scanner: sast; result: r2; triaged at: 2026-09-02T10:01:00Z)_
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2021-44228
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-10/comment
+INFO    demo.fake_api: [FAKE] POST /rest/api/2/issue/JVL-10/comment
+INFO    demo.fake_api: [FAKE]   body: *CVE ID:* CVE-2021-44228. *Subtask:* JVL-11. *CxOne AI Triage verdict:* VULNERABLE. *Confidence:* 98/100 - Component version matches the known-vulnerable range and logging calls include user input.. *Reachability:* REACHABLE - Logger.error() calls include unsanitized HTTP header values.. *Exploitability:* EXPLOITABLE - JNDI lookup pattern substitution is not disabled.. *Attackability:* ATTACKABLE. *Usage locations:* src/main/webapp/filters/RequestLoggingFilter.java:34. *Package:* log4j-core 2.14.1. *Affected component (CxOne):* log4j-core 2.14.1 (direct). *Summary:* log4j-core 2.14.1 is vulnerable to the Log4Shell JNDI lookup RCE and is actively used for request logging. _(scanner: sca; result: r3; triaged at: 2026-09-02T10:02:00Z)_
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2022-23305
+INFO    demo.fake_api: [FAKE]   -> triageStatus=UNCERTAIN reachability=UNCERTAIN exploitability=UNCERTAIN
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-10/comment
+INFO    demo.fake_api: [FAKE] POST /rest/api/2/issue/JVL-10/comment
+INFO    demo.fake_api: [FAKE]   body: *CVE ID:* CVE-2022-23305. *Subtask:* JVL-12. *CxOne AI Triage verdict:* UNCERTAIN. *Confidence:* 40/100 - No direct usage of JDBCAppender found, but dynamic configuration loading could enable it.. *Reachability:* UNCERTAIN - log4j.properties is loaded from an external, user-writable path in one deployment profile.. *Exploitability:* UNCERTAIN - Requires attacker-controlled JDBC configuration, which wasn't confirmed reachable.. *Package:* log4j-core 2.14.1. *Affected component (CxOne):* log4j-core 2.14.1 (direct). *Summary:* Insufficient information to confirm whether the vulnerable JDBCAppender class is loaded at runtime. _(scanner: sca; result: r4; triaged at: 2026-09-02T10:03:00Z)_
+INFO    demo: === Step 3: final outcomes ===
+INFO    demo: JVL-2  scanner=sast  cve/hash=XZBiE9xWT5WiRxxnpMKmKfZUJuA=  alternateId=alt-sast-forum-sqli  groupId=2621223299958738513  triageID=triage-batch-1  status=accepted  aiTriageStatus=PROPOSED_NOT_EXPLOITABLE  commentPosted=True
+INFO    demo: JVL-2  scanner=sast  cve/hash=N4mYQvKzX8pLr2sTuVwXyZ0abCd=  alternateId=alt-sast-login-sqli  groupId=9988776655  triageID=triage-batch-1  status=accepted  aiTriageStatus=VULNERABLE  commentPosted=True
+INFO    demo: JVL-10  scanner=sca  cve/hash=CVE-2021-44228  alternateId=alt-sca-log4shell  groupId=groupid-for-CVE-2021-44228  triageID=triage-batch-2  status=accepted  aiTriageStatus=VULNERABLE  commentPosted=True
+INFO    demo: JVL-10  scanner=sca  cve/hash=CVE-2022-23305  alternateId=alt-sca-log4j-2  groupId=groupid-for-CVE-2022-23305  triageID=triage-batch-2  status=accepted  aiTriageStatus=UNCERTAIN  commentPosted=True
+INFO    demo: === Step 4: re-run the same jobs (simulating a retry/re-dispatch) — expect every trigger AND every comment to be skipped this time ===
+INFO    demo.fake_api: [FAKE] GET /api/sast-results?scan-id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&result-id=['XZBiE9xWT5WiRxxnpMKmKfZUJuA=']
+INFO    demo.fake_api: [FAKE] GET /api/sast-results?scan-id=d01d7561-2bf5-48b2-bbaa-da166c671fc3&result-id=['N4mYQvKzX8pLr2sTuVwXyZ0abCd=']
+INFO    demo.fake_api: [FAKE] GET /api/risks?projectId=1b49ad6f-057f-400c-aa32-f6bc31caf242&engine=['SCA']&riskName=CVE-2021-44228
+INFO    demo.fake_api: [FAKE] GET /api/risks?projectId=1b49ad6f-057f-400c-aa32-f6bc31caf242&engine=['SCA']&riskName=CVE-2022-23305
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/2621223299958738513
+INFO    demo.fake_api: [FAKE]   -> triageStatus=PROPOSED_NOT_EXPLOITABLE reachability=NOT_REACHABLE exploitability=NOT_EXPLOITABLE
+INFO    cxone_ai_triage: JVL-2: skipping trigger, AI Triage already has a result (status=PROPOSED_NOT_EXPLOITABLE)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/9988776655
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    cxone_ai_triage: JVL-2: skipping trigger, AI Triage already has a result (status=VULNERABLE)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2021-44228
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    cxone_ai_triage: JVL-10: skipping trigger, AI Triage already has a result (status=VULNERABLE)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2022-23305
+INFO    demo.fake_api: [FAKE]   -> triageStatus=UNCERTAIN reachability=UNCERTAIN exploitability=UNCERTAIN
+INFO    cxone_ai_triage: JVL-10: skipping trigger, AI Triage already has a result (status=UNCERTAIN)
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/2621223299958738513
+INFO    demo.fake_api: [FAKE]   -> triageStatus=PROPOSED_NOT_EXPLOITABLE reachability=NOT_REACHABLE exploitability=NOT_EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-2/comment
+INFO    cxone_ai_triage: JVL-2: skipping comment, already has one for *Vulnerability ID:* XZBiE9xWT5WiRxxnpMKmKfZUJuA=.
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/9988776655
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-2/comment
+INFO    cxone_ai_triage: JVL-2: skipping comment, already has one for *Vulnerability ID:* N4mYQvKzX8pLr2sTuVwXyZ0abCd=.
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2021-44228
+INFO    demo.fake_api: [FAKE]   -> triageStatus=VULNERABLE reachability=REACHABLE exploitability=EXPLOITABLE
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-10/comment
+INFO    cxone_ai_triage: JVL-10: skipping comment, already has one for *CVE ID:* CVE-2021-44228.
+INFO    demo.fake_api: [FAKE] GET /api/ai-triage/triage/1b49ad6f-057f-400c-aa32-f6bc31caf242/groupid-for-CVE-2022-23305
+INFO    demo.fake_api: [FAKE]   -> triageStatus=UNCERTAIN reachability=UNCERTAIN exploitability=UNCERTAIN
+INFO    demo.fake_api: [FAKE] GET /rest/api/2/issue/JVL-10/comment
+INFO    cxone_ai_triage: JVL-10: skipping comment, already has one for *CVE ID:* CVE-2022-23305.
+INFO    demo: JVL-2  cve/hash=XZBiE9xWT5WiRxxnpMKmKfZUJuA=  status=accepted  triggerSkipped=True  commentPosted=False  commentSkipped=True
+INFO    demo: JVL-2  cve/hash=N4mYQvKzX8pLr2sTuVwXyZ0abCd=  status=accepted  triggerSkipped=True  commentPosted=False  commentSkipped=True
+INFO    demo: JVL-10  cve/hash=CVE-2021-44228  status=accepted  triggerSkipped=True  commentPosted=False  commentSkipped=True
+INFO    demo: JVL-10  cve/hash=CVE-2022-23305  status=accepted  triggerSkipped=True  commentPosted=False  commentSkipped=True
+INFO    demo: Re-run triggered 0 new POST /api/ai-triage/triage calls and posted 0 new comments (still 4 total from the first run) - the existing-triage check avoided re-triggering, and the duplicate-comment check avoided re-posting.
+
+====================================================================================================
+Jira comments actually posted (via FakeJiraClient): 4
+====================================================================================================
+
+--- comment on JVL-2 ---
+*Vulnerability ID:* XZBiE9xWT5WiRxxnpMKmKfZUJuA=. *CxOne AI Triage verdict:* PROPOSED_NOT_EXPLOITABLE. *Confidence:* 91/100 - Strong static evidence of parameterized query usage.. *Reachability:* NOT_REACHABLE - The vulnerable sink sits behind an admin-only code path never invoked from user input.. *Exploitability:* NOT_EXPLOITABLE - Input is bound via PreparedStatement parameters, not concatenated.. *Usage locations:* src/main/webapp/vulnerability/forum.jsp:48. *Summary:* The tainted input is fully sanitized via PreparedStatement before reaching the query. _(scanner: sast; result: r1; triaged at: 2026-09-02T10:00:00Z)_
+
+--- comment on JVL-2 ---
+*Vulnerability ID:* N4mYQvKzX8pLr2sTuVwXyZ0abCd=. *CxOne AI Triage verdict:* VULNERABLE. *Confidence:* 95/100 - Direct unsanitized concatenation confirmed via data flow trace.. *Reachability:* REACHABLE - Endpoint is public and directly reachable from the login controller.. *Exploitability:* EXPLOITABLE - No input validation or escaping present before the query executes.. *Usage locations:* src/main/webapp/vulnerability/login.jsp:22. *Summary:* Untrusted request parameter flows directly into a raw SQL string without sanitization. _(scanner: sast; result: r2; triaged at: 2026-09-02T10:01:00Z)_
+
+--- comment on JVL-10 ---
+*CVE ID:* CVE-2021-44228. *Subtask:* JVL-11. *CxOne AI Triage verdict:* VULNERABLE. *Confidence:* 98/100 - Component version matches the known-vulnerable range and logging calls include user input.. *Reachability:* REACHABLE - Logger.error() calls include unsanitized HTTP header values.. *Exploitability:* EXPLOITABLE - JNDI lookup pattern substitution is not disabled.. *Attackability:* ATTACKABLE. *Usage locations:* src/main/webapp/filters/RequestLoggingFilter.java:34. *Package:* log4j-core 2.14.1. *Affected component (CxOne):* log4j-core 2.14.1 (direct). *Summary:* log4j-core 2.14.1 is vulnerable to the Log4Shell JNDI lookup RCE and is actively used for request logging. _(scanner: sca; result: r3; triaged at: 2026-09-02T10:02:00Z)_
+
+--- comment on JVL-10 ---
+*CVE ID:* CVE-2022-23305. *Subtask:* JVL-12. *CxOne AI Triage verdict:* UNCERTAIN. *Confidence:* 40/100 - No direct usage of JDBCAppender found, but dynamic configuration loading could enable it.. *Reachability:* UNCERTAIN - log4j.properties is loaded from an external, user-writable path in one deployment profile.. *Exploitability:* UNCERTAIN - Requires attacker-controlled JDBC configuration, which wasn't confirmed reachable.. *Package:* log4j-core 2.14.1. *Affected component (CxOne):* log4j-core 2.14.1 (direct). *Summary:* Insufficient information to confirm whether the vulnerable JDBCAppender class is loaded at runtime. _(scanner: sca; result: r4; triaged at: 2026-09-02T10:03:00Z)_
