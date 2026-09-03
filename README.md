@@ -99,7 +99,7 @@ transient error) fails open — it triggers as usual rather than blocking the
 run. A job with no `groupId` yet (e.g. the SCA `/api/risks` lookup found
 nothing) skips the check and triggers as before.
 
-**Any status other than a blank/`NOT_TRIAGED` value (case/whitespace
+**Any status other than a blank/`NOT_TRIAGED`/`FAILED` value (case/whitespace
 normalized) counts as "already exists"** — this is deliberately permissive
 rather than an allowlist of `AiTriageResult`'s documented `triageStatus`
 values (`NOT_TRIAGED`, `IN_PROGRESS`, `FAILED`, `VULNERABLE`,
@@ -113,6 +113,12 @@ predefined one, never a custom state, so this field's real universe of
 values is still bounded even though it's broader than the SDK's own
 docstring enum. A strict allowlist would have wrongly treated `CONFIRMED`
 as "not triaged yet" and re-triggered needlessly.
+
+`FAILED` is the one deliberate exception to "already exists": it means AI
+Triage itself never produced a verdict, so treating it the same as a real
+result would permanently block a retry on every future run. It's treated
+the same as blank/`NOT_TRIAGED` instead, so a previously failed job gets
+re-batched and re-triggered on the next run.
 
 ### Batching the trigger call
 
