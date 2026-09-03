@@ -170,6 +170,30 @@ class TestRunPipeline(unittest.TestCase):
         self.assertFalse(outcomes[1].comment_posted)
         self.assertIsNotNone(outcomes[1].comment_skipped_reason)
 
+    def test_two_different_vulnerabilities_on_the_same_ticket_each_get_their_own_comment(self):
+        # e.g. a ticket with VulnerabilityId1 and VulnerabilityId2 (or two SCA
+        # subtasks) both populated - distinct result_hash/cve_id, so neither
+        # marker matches the other's comment and both get posted.
+        job1 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-one")
+        job2 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-two")
+        outcome1 = make_accepted_outcome(job1, group_id="group-1")
+        outcome2 = make_accepted_outcome(job2, group_id="group-2")
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome1}, poll_result=result)
+        resolver.resolve_and_trigger_all = lambda jobs: [outcome1, outcome2]
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job1, job2], resolver, jira_client)
+
+        self.assertEqual(len(jira_client.comments), 2)
+        self.assertTrue(outcomes[0].comment_posted)
+        self.assertTrue(outcomes[1].comment_posted)
+        self.assertIsNone(outcomes[0].comment_skipped_reason)
+        self.assertIsNone(outcomes[1].comment_skipped_reason)
+        self.assertEqual({key for key, _ in jira_client.comments}, {"JVL-2"})
+        self.assertIn("*Vulnerability ID:* hash-one.", jira_client.comments[0][1])
+        self.assertIn("*Vulnerability ID:* hash-two.", jira_client.comments[1][1])
+
     def test_posts_normally_when_existing_comment_check_fails(self):
         job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
         outcome = make_accepted_outcome(job)

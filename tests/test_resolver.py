@@ -256,6 +256,20 @@ class TestTriageResolver(unittest.TestCase):
         self.assertIn("CONFIRMED", outcome.trigger_skipped_reason)
         self.assertEqual(self.resolver.trigger_calls, [])
 
+    def test_a_prior_failed_status_does_not_block_a_retry(self):
+        # Unlike other terminal statuses, FAILED means AI Triage itself never
+        # produced a verdict - it must not be treated as "already exists",
+        # or a genuinely failed attempt could never be retried automatically.
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="FAILED")
+
+        outcome = self.resolver.resolve_and_trigger(job)
+
+        self.assertIsNone(outcome.trigger_skipped_reason)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertEqual(outcome.triage_id, "triage-1")
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+
     def test_not_triaged_status_is_normalized_for_case_and_whitespace(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
         self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus=" not_triaged ")
@@ -301,6 +315,48 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(needs_trigger.triage_id, "triage-1")
         # Only the un-triaged one made it into the batch.
         self.assertEqual(self.resolver.trigger_calls, [(SCAN_ID, [("sast", ["alt-sast-2"])])])
+
+    def test_mixed_sca_batch_only_triggers_the_cve_without_an_existing_result(self):
+        # Same as test_mixed_batch_only_triggers_the_jobs_without_an_existing_result,
+        # but for SCA: each subtask's groupId comes from /api/risks per-CVE
+        # (see _fake_get_risks), so the pre-check must still be per-CVE, not
+        # per-ticket, when a ticket has multiple "SCA | CVE-..." subtasks.
+        self.resolver.existing_triage_by_group_id["groupid-for-CVE-2021-44228"] = AiTriageResult(
+            triageStatus="CONFIRMED"
+        )
+        jobs = [
+            TriageJob(
+                scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-11",
+                cve_id="CVE-2021-44228", package_identifier="log4j-core-2.14.1",
+            ),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-11", cve_id="CVE-2022-23305"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        already_done, needs_trigger = outcomes
+        self.assertEqual(already_done.status, "accepted", already_done.error)
+        self.assertIsNotNone(already_done.trigger_skipped_reason)
+        self.assertIn("CONFIRMED", already_done.trigger_skipped_reason)
+        self.assertIsNone(needs_trigger.trigger_skipped_reason)
+        self.assertEqual(needs_trigger.status, "accepted", needs_trigger.error)
+        # Only the un-triaged CVE made it into the batch.
+        self.assertEqual(self.resolver.trigger_calls, [(SCAN_ID, [("sca", ["alt-sca-c"])])])
+
+    def test_batch_call_is_skipped_entirely_when_every_job_already_has_a_result(self):
+        # If every job sharing a (scan_id, scanner_type) is already triaged,
+        # no POST /api/ai-triage/triage should happen at all for that group -
+        # not even with an empty bucket.
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="VULNERABLE")
+        self.resolver.existing_triage_by_group_id["654321"] = AiTriageResult(triageStatus="CONFIRMED")
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-two"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        self.assertTrue(all(o.trigger_skipped_reason for o in outcomes))
+        self.assertTrue(all(o.status == "accepted" for o in outcomes))
+        self.assertEqual(self.resolver.trigger_calls, [])
 
     def test_unknown_result_hash_fails_without_raising(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-4", result_hash="does-not-exist")

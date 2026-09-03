@@ -11,6 +11,13 @@
   results landing on the same parent ticket within one run. A failed check
   fails open (posts as usual).
 
+### Fixed
+- `_check_existing_triage` no longer treats a prior `FAILED` `triageStatus`
+  as "already exists". `FAILED` means AI Triage itself never produced a
+  verdict, so treating it like a real result meant a genuinely failed
+  attempt could never be retried automatically; it's now treated the same
+  as blank/`NOT_TRIAGED` and gets re-triggered on the next run.
+
 ## [0.2.3]
 
 ### Changed

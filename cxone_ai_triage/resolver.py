@@ -34,7 +34,10 @@ already exists — whether still IN_PROGRESS from an earlier run or already
 finished — the trigger is skipped for that job entirely (outcome.
 trigger_skipped_reason is set instead) rather than re-submitting it; the
 pipeline's subsequent poll picks up the existing result either way (an
-already-terminal result returns on the poll's first call, no waiting).
+already-terminal result returns on the poll's first call, no waiting). A
+prior FAILED status is the one exception: it means AI Triage never actually
+produced a verdict, so it's treated the same as no result at all and the
+job is re-triggered rather than skipped forever.
 
 All five SDK API classes share one ApiClient (and so one OAuth token/
 TokenManager) rather than each building its own — confirmed via live logs
@@ -258,11 +261,17 @@ class TriageResolver:
         ever assigns a predefined one, never a tenant's custom state, so the
         real universe of values this field can hold is still bounded and
         known even though it's broader than AiTriageResult's own docstring
-        enum. So anything other than a blank/NOT_TRIAGED value (normalized
-        for case/whitespace) is treated as "already exists" — narrowing
-        this to a strict allowlist would wrongly treat legitimate-but-
-        undocumented statuses as "not triaged yet" and re-trigger
+        enum. So anything other than a blank/NOT_TRIAGED/FAILED value
+        (normalized for case/whitespace) is treated as "already exists" —
+        narrowing this to a strict allowlist would wrongly treat legitimate-
+        but-undocumented statuses as "not triaged yet" and re-trigger
         needlessly.
+
+        FAILED is excluded on purpose too: unlike a genuine verdict, it
+        means AI Triage itself never produced a result, so treating it as
+        "already exists" would permanently block a retry on every future
+        run. Letting it fall through here means the job gets re-batched and
+        re-triggered instead.
         """
         try:
             result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
@@ -273,7 +282,7 @@ class TriageResolver:
             )
             return None
         status = (result.triageStatus or "").strip().upper()
-        if status in ("", "NOT_TRIAGED"):
+        if status in ("", "NOT_TRIAGED", "FAILED"):
             return None
         return result
 
