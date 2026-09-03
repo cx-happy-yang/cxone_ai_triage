@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.4]
 
 ### Added
 - Before posting a Jira comment, `pipeline.py` now checks the ticket's
