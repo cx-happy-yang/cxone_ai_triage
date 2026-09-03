@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.2]
 
 ### Added
 - Before triggering, `resolver.resolve_and_trigger_all` now checks
