@@ -135,6 +135,42 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.package_identifier, "log4j-api-2.14.1")
         self.assertEqual(outcome.group_id, "groupid-for-CVE-2021-44228")
 
+    def test_group_id_is_still_resolved_when_the_risk_is_tagged_with_a_different_scan(self):
+        # GET /api/risks aggregates at the project level - a live tenant
+        # returned zero risks tagged with the ticket's scan_id for a CVE
+        # that had genuinely already been AI-triaged, because the project
+        # had been rescanned since. A scanId mismatch alone must not
+        # discard the only candidate.
+        job = TriageJob(
+            scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-9",
+            cve_id="CVE-2021-44228", package_identifier="log4j-core-2.14.1",
+        )
+        self.resolver._risks_api.get_risks = lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+            metaData=RisksMetaData(),
+            risks=[Risk(id="riskrow", scanId="some-other-later-scan", engine="SCA", groupId="groupid-for-CVE-2021-44228")],
+        )
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.group_id, "groupid-for-CVE-2021-44228")
+
+    def test_multiple_risks_for_the_same_cve_are_disambiguated_by_package_identifier(self):
+        # Same idea, but with two risks sharing this CVE (e.g. the package
+        # appears in more than one module) and neither tagged with this
+        # job's scan_id - package_identifier (matched against assetName)
+        # must still pick the right one instead of just taking the first.
+        job = TriageJob(
+            scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-9",
+            cve_id="CVE-2021-44228", package_identifier="log4j-api-2.14.1",
+        )
+        self.resolver._risks_api.get_risks = lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+            metaData=RisksMetaData(),
+            risks=[
+                Risk(id="r1", scanId="other-scan", engine="SCA", assetName="pom.xml (log4j-core-2.14.1)", groupId="groupid-core"),
+                Risk(id="r2", scanId="other-scan", engine="SCA", assetName="pom.xml (log4j-api-2.14.1)", groupId="groupid-api"),
+            ],
+        )
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.group_id, "groupid-api")
+
     def test_results_and_project_id_are_cached_across_jobs_on_same_scan(self):
         jobs = [
             TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
