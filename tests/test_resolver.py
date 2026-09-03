@@ -240,6 +240,32 @@ class TestTriageResolver(unittest.TestCase):
         self.assertIsNone(outcome.triage_id)
         self.assertEqual(self.resolver.trigger_calls, [])
 
+    def test_skips_trigger_for_an_undocumented_status_value(self):
+        # A live tenant returned "CONFIRMED" (a SAST result *state*, not one
+        # of AiTriageResult's documented triageStatus values) for a
+        # genuinely already-triaged vulnerability. The check must still
+        # treat it as "existing" rather than only recognizing the
+        # documented enum - see _check_existing_triage's docstring.
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="CONFIRMED")
+
+        outcome = self.resolver.resolve_and_trigger(job)
+
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertIsNone(outcome.triage_id)
+        self.assertIn("CONFIRMED", outcome.trigger_skipped_reason)
+        self.assertEqual(self.resolver.trigger_calls, [])
+
+    def test_not_triaged_status_is_normalized_for_case_and_whitespace(self):
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus=" not_triaged ")
+
+        outcome = self.resolver.resolve_and_trigger(job)
+
+        # Still recognized as "nothing yet" despite the case/whitespace - triggers normally.
+        self.assertIsNone(outcome.trigger_skipped_reason)
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+
     def test_triggers_normally_when_no_existing_result(self):
         # Default fake behavior (NOT_TRIAGED) - regression check that the
         # pre-check doesn't block a genuinely new result.

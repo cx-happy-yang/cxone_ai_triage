@@ -99,6 +99,21 @@ transient error) fails open — it triggers as usual rather than blocking the
 run. A job with no `groupId` yet (e.g. the SCA `/api/risks` lookup found
 nothing) skips the check and triggers as before.
 
+**Any status other than a blank/`NOT_TRIAGED` value (case/whitespace
+normalized) counts as "already exists"** — this is deliberately permissive
+rather than an allowlist of `AiTriageResult`'s documented `triageStatus`
+values (`NOT_TRIAGED`, `IN_PROGRESS`, `FAILED`, `VULNERABLE`,
+`PROPOSED_NOT_EXPLOITABLE`, `UNCERTAIN`, `RISK_ACCEPTED`). Live testing hit
+`CONFIRMED` (a SAST/SCA result *state* value, not in that enum) for a
+vulnerability that had genuinely already been AI-triaged. Result states
+have predefined values (`TO_VERIFY`, `NOT_EXPLOITABLE`,
+`PROPOSED_NOT_EXPLOITABLE`, `CONFIRMED`, `URGENT`) plus whatever custom
+states a tenant defines — but AI Triage itself only ever assigns a
+predefined one, never a custom state, so this field's real universe of
+values is still bounded even though it's broader than the SDK's own
+docstring enum. A strict allowlist would have wrongly treated `CONFIRMED`
+as "not triaged yet" and re-triggered needlessly.
+
 ### Batching the trigger call
 
 Each job's identifiers (`similarityId`, `alternateId`, `groupId`, ...) are
