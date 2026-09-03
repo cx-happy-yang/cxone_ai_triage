@@ -59,7 +59,10 @@ class TriageOutcome:
 
     poll_error / comment_error are best-effort failures on top of an
     already-successful trigger: they never flip `status` back to "failed"
-    (see pipeline.run_pipeline).
+    (see pipeline.run_pipeline). trigger_skipped_reason is set instead of
+    triage_id when an existing AI Triage result was found before triggering
+    and the trigger call was skipped entirely (see
+    TriageResolver._check_existing_triage).
     """
 
     job: TriageJob
@@ -71,6 +74,7 @@ class TriageOutcome:
     triage_id: Optional[str] = None
     status: str = "pending"  # pending | accepted | failed
     error: Optional[str] = None
+    trigger_skipped_reason: Optional[str] = None
     ai_triage_status: Optional[str] = None
     reachability_status: Optional[str] = None
     exploitability_status: Optional[str] = None
@@ -95,6 +99,7 @@ class TriageOutcome:
             "triage_id": self.triage_id,
             "status": self.status,
             "error": self.error,
+            "trigger_skipped_reason": self.trigger_skipped_reason,
             "ai_triage_status": self.ai_triage_status,
             "reachability_status": self.reachability_status,
             "exploitability_status": self.exploitability_status,

@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Before triggering, `resolver.resolve_and_trigger_all` now checks
+  `GET /api/ai-triage/triage/{projectId}/{groupId}` for an existing result
+  first. If one already exists (`IN_PROGRESS` or already finished), the
+  trigger is skipped for that job (`outcome.trigger_skipped_reason` is set)
+  instead of re-submitting an identical request — this matters most on
+  re-runs/retries, where nothing gets re-triggered but polling and
+  commenting still complete normally against the existing result. A failed
+  check fails open (triggers as usual); a job with no `groupId` yet skips
+  the check the same way it always has.
+
 ## [0.2.1]
 
 ### Fixed

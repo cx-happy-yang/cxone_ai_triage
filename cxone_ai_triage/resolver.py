@@ -27,6 +27,14 @@ bucket, so jobs sharing the same (scan_id, scanner_type) — e.g. a SAST
 ticket with several populated VulnerabilityId fields — are combined into a
 single POST /api/ai-triage/triage request instead of one per job, and all
 their outcomes get the same triageID back.
+
+Before triggering, each resolved job (that has a groupId) is checked
+against GET /api/ai-triage/triage/{projectId}/{groupId} first. If a result
+already exists — whether still IN_PROGRESS from an earlier run or already
+finished — the trigger is skipped for that job entirely (outcome.
+trigger_skipped_reason is set instead) rather than re-submitting it; the
+pipeline's subsequent poll picks up the existing result either way (an
+already-terminal result returns on the poll's first call, no waiting).
 """
 import logging
 import time
@@ -215,6 +223,28 @@ class TriageResolver:
             logger.error("%s failed: %s", job.ticket_key or job.scan_id, e)
         return outcome
 
+    def _check_existing_triage(self, project_id: str, group_id: str) -> Optional[AiTriageResult]:
+        """GET /api/ai-triage/triage/{projectId}/{groupId} before triggering.
+
+        Returns the existing result if one is already in progress or
+        finished (any status other than NOT_TRIAGED/empty), so the caller
+        can skip triggering it again. Returns None if there's genuinely no
+        existing result yet, or if the check itself fails — a failed check
+        is treated as "no existing result" so triggering still proceeds
+        normally rather than blocking on this optimization.
+        """
+        try:
+            result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+        except Exception as e:  # noqa: BLE001 - fail open, just trigger as usual
+            logger.debug(
+                "Existing-triage check failed for project %s group %s (will trigger normally): %s",
+                project_id, group_id, e,
+            )
+            return None
+        if not result.triageStatus or result.triageStatus == "NOT_TRIAGED":
+            return None
+        return result
+
     def _trigger_batch(self, scan_id: str, scanner_type: str, outcomes: List[TriageOutcome]) -> None:
         """Trigger one POST /api/ai-triage/triage for every outcome in this
         (scan_id, scanner_type) group, bucketing their alternateIds together.
@@ -252,17 +282,31 @@ class TriageResolver:
         return self.resolve_and_trigger_all([job])[0]
 
     def resolve_and_trigger_all(self, jobs: List[TriageJob]) -> List[TriageOutcome]:
-        """Resolve every job, then trigger AI Triage — batching jobs that
-        share the same (scan_id, scanner_type) into one request each (e.g. a
-        SAST ticket with several populated VulnerabilityId fields), rather
-        than one request per job.
+        """Resolve every job, then trigger AI Triage for whichever ones don't
+        already have a result — batching jobs that share the same
+        (scan_id, scanner_type) into one request each (e.g. a SAST ticket
+        with several populated VulnerabilityId fields), rather than one
+        request per job.
         """
         outcomes = [self._resolve_only(job) for job in jobs]
 
         batches: Dict[Tuple[str, str], List[TriageOutcome]] = defaultdict(list)
         for job, outcome in zip(jobs, outcomes):
-            if outcome.status != "failed":
-                batches[(job.scan_id, job.scanner_type)].append(outcome)
+            if outcome.status == "failed":
+                continue
+
+            if outcome.project_id and outcome.group_id:
+                existing = self._check_existing_triage(outcome.project_id, outcome.group_id)
+                if existing is not None:
+                    outcome.status = "accepted"
+                    outcome.trigger_skipped_reason = f"existing triageStatus={existing.triageStatus}"
+                    logger.info(
+                        "%s: skipping trigger, AI Triage already has a result (status=%s)",
+                        job.ticket_key or job.scan_id, existing.triageStatus,
+                    )
+                    continue
+
+            batches[(job.scan_id, job.scanner_type)].append(outcome)
 
         for (scan_id, scanner_type), batch_outcomes in batches.items():
             self._trigger_batch(scan_id, scanner_type, batch_outcomes)

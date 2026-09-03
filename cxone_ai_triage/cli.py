@@ -144,6 +144,8 @@ def main(argv=None) -> int:
                 label, o.status, o.triage_id, o.ai_triage_status,
                 o.reachability_status, o.exploitability_status, o.comment_posted,
             )
+            if o.trigger_skipped_reason:
+                logger.info("%s: trigger skipped - %s", label, o.trigger_skipped_reason)
             if o.poll_error:
                 logger.warning("%s: poll error - %s", label, o.poll_error)
             if o.comment_error:

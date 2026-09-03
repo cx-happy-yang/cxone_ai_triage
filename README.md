@@ -84,23 +84,38 @@ guessing a delimiter/order.
 paged through (500 at a time) and cached per scan — unavoidable, but paid
 once per scan even across many ticket rows in the same batch.
 
+### Checking for an existing result before triggering
+
+Before batching a job for triggering, `resolver.resolve_and_trigger_all`
+first checks `GET /api/ai-triage/triage/{projectId}/{groupId}` (the same
+call `poll_ai_triage_result` uses). If that result already exists — whether
+still `IN_PROGRESS` from an earlier run or already finished — the trigger
+is skipped for that job entirely (`outcome.trigger_skipped_reason` is set,
+`triage_id` stays `None`) instead of re-submitting it. This matters most on
+re-runs/retries of the same ticket: nothing gets re-triggered, but polling
+and commenting still happen normally, since `poll_ai_triage_result` returns
+immediately when the status is already terminal. A failed check (e.g. a
+transient error) fails open — it triggers as usual rather than blocking the
+run. A job with no `groupId` yet (e.g. the SCA `/api/risks` lookup found
+nothing) skips the check and triggers as before.
+
 ### Batching the trigger call
 
 Each job's identifiers (`similarityId`, `alternateId`, `groupId`, ...) are
 always resolved individually — every result has its own distinct `groupId`
-to poll later regardless of how the trigger was submitted. But
-`resolver.resolve_and_trigger_all` groups jobs sharing the same
-`(scan_id, scanner_type)` into a **single** `POST /api/ai-triage/triage`
-request (one bucket, multiple `resultIDs`) instead of one request per
-result; all outcomes in that batch get back the same `triageID`. This
-covers both: a SAST ticket with `VulnerabilityId1` and `VulnerabilityId2`
-both populated, and an SCA ticket with multiple `"SCA | CVE-..."` subtasks
-(they share the ticket's one `scanId`, so they group together the same
-way). A batch's trigger call failing fails every outcome in it; a job that
-fails identifier *resolution* is excluded from its batch rather than
-blocking the others. Polling and Jira commenting stay per-job either way
-(see below) — each result (and, for SCA, each subtask) still gets its own
-verdict and its own comment.
+to poll later regardless of how the trigger was submitted. But jobs that
+still need triggering (i.e. didn't already have an existing result, per
+above) and share the same `(scan_id, scanner_type)` are grouped into a
+**single** `POST /api/ai-triage/triage` request (one bucket, multiple
+`resultIDs`) instead of one request per result; all outcomes in that batch
+get back the same `triageID`. This covers both: a SAST ticket with
+`VulnerabilityId1` and `VulnerabilityId2` both populated, and an SCA ticket
+with multiple `"SCA | CVE-..."` subtasks (they share the ticket's one
+`scanId`, so they group together the same way). A batch's trigger call
+failing fails every outcome in it; a job that fails identifier *resolution*
+is excluded from its batch rather than blocking the others. Polling and
+Jira commenting stay per-job either way (see below) — each result (and, for
+SCA, each subtask) still gets its own verdict and its own comment.
 
 ### Polling the result and posting it back to Jira
 
@@ -202,13 +217,16 @@ See `samples/input.sample.json` / `samples/input.sample.csv` /
 (SCA, with subtasks).
 
 Output is a JSON/CSV report with the resolved `project_id`, `similarity_id`,
-`alternate_id`, `group_id`, the `triage_id` returned by the trigger call,
-`status` (`accepted` or `failed` with an `error` message), the polled
-`ai_triage_status`/`reachability_status`/`exploitability_status`/
-`attackability_status`/`ai_triage_summary` (`poll_error` if polling failed),
-and `comment_posted` (`comment_error` if posting failed). The CLI exits
-non-zero only if a **trigger** failed — poll/comment failures are best-effort
-and reported but don't affect the exit code.
+`alternate_id`, `group_id`, the `triage_id` returned by the trigger call (or
+`null` with `trigger_skipped_reason` set if an existing result meant
+triggering was skipped — see "Checking for an existing result before
+triggering" above), `status` (`accepted` or `failed` with an `error`
+message), the polled `ai_triage_status`/`reachability_status`/
+`exploitability_status`/`attackability_status`/`ai_triage_summary`
+(`poll_error` if polling failed), and `comment_posted` (`comment_error` if
+posting failed). The CLI exits non-zero only if a **trigger** failed —
+poll/comment failures are best-effort and reported but don't affect the
+exit code.
 
 Flags: `--no-poll` (trigger only, skip polling/commenting entirely),
 `--no-comment` (poll but don't post to Jira), `--poll-timeout` /
