@@ -332,5 +332,33 @@ class TestPollAiTriageResult(unittest.TestCase):
                 )
 
 
+class _FakeConfiguration:
+    server_base_url = "https://fake.ast.checkmarx.net"
+
+
+class _FakeApiClient:
+    """Minimal stand-in for CheckmarxPythonSDK's ApiClient: each CxOne SDK
+    class's __init__ reads .configuration.server_base_url to build its
+    base_url, so a bare sentinel object isn't enough - identity is what
+    this test actually checks."""
+
+    configuration = _FakeConfiguration()
+
+
+class TestSharedApiClient(unittest.TestCase):
+    def test_all_five_sdk_clients_share_one_api_client(self):
+        sentinel = _FakeApiClient()
+        resolver = TriageResolver(api_client=sentinel)
+
+        clients = {
+            resolver._scans_api.api_client,
+            resolver._sast_results_api.api_client,
+            resolver._scanner_results_api.api_client,
+            resolver._risks_api.api_client,
+            resolver._ai_triage_api.api_client,
+        }
+        self.assertEqual(clients, {sentinel})
+
+
 if __name__ == "__main__":
     unittest.main()

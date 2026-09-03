@@ -167,6 +167,14 @@ export CXONE_CLIENT_SECRET=<oauth client secret>
 `refresh_token` or it will ignore the client id/secret. Adjust `CXONE_SERVER`
 / `CXONE_ACCESS_CONTROL_URL` for your Checkmarx One region.)
 
+`TriageResolver` builds one shared `ApiClient` (and so one OAuth token) and
+passes it into all five `CheckmarxPythonSDK.CxOne` classes it uses
+(`ScansAPI`, `SastResultsAPI`, `ScannersResultsAPI`, `RiskOrchestrationAPI`,
+`AiTriageAPI`) instead of letting each build its own — confirmed via live
+logs that the default (each class calling `construct_configuration()`
+itself) means a separate token fetch per class actually used in a run (up
+to 4–5 extra round-trips).
+
 Jira comment posting is optional — read by `jira_client.py`:
 
 ```bash
