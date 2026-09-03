@@ -8,6 +8,21 @@
   uses, instead of letting each build its own via `construct_configuration()`.
   Live logs showed the latter fetching a separate token per class actually
   used in a run (up to 4–5 extra round-trips).
+  
+### Fixed
+- Hardened `_check_existing_triage`'s status check (added in 0.2.2). Live
+  testing showed a real tenant returning `CONFIRMED` — a SAST/SCA result
+  *state* value, not one of `AiTriageResult`'s documented `triageStatus`
+  values — for a vulnerability that had genuinely already been AI-triaged.
+  Result states have predefined values (`TO_VERIFY`, `NOT_EXPLOITABLE`,
+  `PROPOSED_NOT_EXPLOITABLE`, `CONFIRMED`, `URGENT`) plus whatever custom
+  states a tenant defines, but AI Triage only ever assigns a predefined
+  one — so this field's real universe of values is bounded, just broader
+  than the SDK's own docstring enum. The check now normalizes for
+  case/whitespace but stays deliberately permissive (anything but
+  blank/`NOT_TRIAGED` counts as "already exists") rather than narrowing to
+  a strict allowlist of the documented enum, which would have wrongly
+  treated `CONFIRMED` as "not triaged yet" and re-triggered needlessly.
 
 ## [0.2.2]
 

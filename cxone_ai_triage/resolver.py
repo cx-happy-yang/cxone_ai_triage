@@ -241,11 +241,28 @@ class TriageResolver:
         """GET /api/ai-triage/triage/{projectId}/{groupId} before triggering.
 
         Returns the existing result if one is already in progress or
-        finished (any status other than NOT_TRIAGED/empty), so the caller
-        can skip triggering it again. Returns None if there's genuinely no
-        existing result yet, or if the check itself fails — a failed check
-        is treated as "no existing result" so triggering still proceeds
-        normally rather than blocking on this optimization.
+        finished, so the caller can skip triggering it again. Returns None
+        if there's genuinely no existing result yet, or if the check itself
+        fails — a failed check is treated as "no existing result" so
+        triggering still proceeds normally rather than blocking on this
+        optimization.
+
+        Deliberately permissive rather than an allowlist of AiTriageResult's
+        documented triageStatus values (NOT_TRIAGED, IN_PROGRESS, FAILED,
+        VULNERABLE, PROPOSED_NOT_EXPLOITABLE, UNCERTAIN, RISK_ACCEPTED): a
+        live tenant returned "CONFIRMED" (a SAST/SCA result *state* value,
+        not in that enum) for a vulnerability that genuinely had already
+        been AI-triaged. Result states have predefined values (TO_VERIFY,
+        NOT_EXPLOITABLE, PROPOSED_NOT_EXPLOITABLE, CONFIRMED, URGENT) plus
+        whatever custom states a tenant defines — but AI Triage itself only
+        ever assigns a predefined one, never a tenant's custom state, so the
+        real universe of values this field can hold is still bounded and
+        known even though it's broader than AiTriageResult's own docstring
+        enum. So anything other than a blank/NOT_TRIAGED value (normalized
+        for case/whitespace) is treated as "already exists" — narrowing
+        this to a strict allowlist would wrongly treat legitimate-but-
+        undocumented statuses as "not triaged yet" and re-trigger
+        needlessly.
         """
         try:
             result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
@@ -255,7 +272,8 @@ class TriageResolver:
                 project_id, group_id, e,
             )
             return None
-        if not result.triageStatus or result.triageStatus == "NOT_TRIAGED":
+        status = (result.triageStatus or "").strip().upper()
+        if status in ("", "NOT_TRIAGED"):
             return None
         return result
 
