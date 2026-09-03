@@ -51,11 +51,23 @@ class FakeSdkResolver(TriageResolver):
         super().__init__()
         self.results_call_count = 0
         self.trigger_calls = []  # list of (scanID, [(scannerType, resultIDs), ...])
+        self.existing_triage_by_group_id = {}  # group_id -> AiTriageResult, for pre-check tests
+        self.existing_triage_check_calls = []  # list of (project_id, group_id)
         self._scans_api.get_a_scan_by_id = self._fake_get_a_scan_by_id
         self._sast_results_api.get_sast_results_by_scan_id = self._fake_get_sast_results
         self._scanner_results_api.get_all_scanners_results_by_scan_id = self._fake_get_all_results
         self._risks_api.get_risks = self._fake_get_risks
         self._ai_triage_api.trigger_ai_triage = self._fake_trigger_ai_triage
+        self._ai_triage_api.retrieve_ai_triage_results = self._fake_retrieve_ai_triage_results
+
+    def _fake_retrieve_ai_triage_results(self, project_id, group_id):
+        # Default: nothing has ever been triaged, so the pre-check never
+        # blocks triggering unless a test opts a specific group_id in via
+        # existing_triage_by_group_id.
+        self.existing_triage_check_calls.append((project_id, group_id))
+        return self.existing_triage_by_group_id.get(
+            group_id, AiTriageResult(triageStatus="NOT_TRIAGED")
+        )
 
     def _fake_get_a_scan_by_id(self, scan_id):
         assert scan_id == SCAN_ID
@@ -204,6 +216,65 @@ class TestTriageResolver(unittest.TestCase):
         # The batch only ever contained the one resolvable job.
         self.assertEqual(len(self.resolver.trigger_calls), 1)
         self.assertEqual(self.resolver.trigger_calls[0][1], [("sast", ["alt-sast-1"])])
+
+    def test_skips_trigger_when_a_finished_result_already_exists(self):
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        # group_id for this job is the similarityId, "123456" (see test_sast_job_resolves_and_triggers).
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="VULNERABLE")
+
+        outcome = self.resolver.resolve_and_trigger(job)
+
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertIsNone(outcome.triage_id)
+        self.assertIn("VULNERABLE", outcome.trigger_skipped_reason)
+        self.assertEqual(self.resolver.trigger_calls, [])  # no POST was made
+        self.assertEqual(self.resolver.existing_triage_check_calls, [(PROJECT_ID, "123456")])
+
+    def test_skips_trigger_when_a_result_is_already_in_progress(self):
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="IN_PROGRESS")
+
+        outcome = self.resolver.resolve_and_trigger(job)
+
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertIsNone(outcome.triage_id)
+        self.assertEqual(self.resolver.trigger_calls, [])
+
+    def test_triggers_normally_when_no_existing_result(self):
+        # Default fake behavior (NOT_TRIAGED) - regression check that the
+        # pre-check doesn't block a genuinely new result.
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertEqual(outcome.triage_id, "triage-1")
+        self.assertIsNone(outcome.trigger_skipped_reason)
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+
+    def test_triggers_normally_when_existing_triage_check_itself_fails(self):
+        # A broken pre-check should fail open (trigger as usual), not block the run.
+        def broken_check(project_id, group_id):
+            raise RuntimeError("503 Service Unavailable")
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = broken_check
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+
+    def test_mixed_batch_only_triggers_the_jobs_without_an_existing_result(self):
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="VULNERABLE")
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-two"),
+        ]
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        already_done, needs_trigger = outcomes
+        self.assertIsNotNone(already_done.trigger_skipped_reason)
+        self.assertIsNone(needs_trigger.trigger_skipped_reason)
+        self.assertEqual(needs_trigger.triage_id, "triage-1")
+        # Only the un-triaged one made it into the batch.
+        self.assertEqual(self.resolver.trigger_calls, [(SCAN_ID, [("sast", ["alt-sast-2"])])])
 
     def test_unknown_result_hash_fails_without_raising(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-4", result_hash="does-not-exist")

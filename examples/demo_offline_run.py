@@ -224,6 +224,16 @@ def install_fakes(resolver: TriageResolver) -> None:
         )
 
     trigger_call_count = [0]
+    triggered_group_ids = set()  # models real server state: nothing is
+    # triaged until actually triggered, so the new pre-check (before the
+    # trigger) sees NOT_TRIAGED, and only the post-trigger poll sees the
+    # finished verdict.
+    alternate_id_to_group_id = {
+        "alt-sast-forum-sqli": "2621223299958738513",
+        "alt-sast-login-sqli": "9988776655",
+        "alt-sca-log4shell": "groupid-for-CVE-2021-44228",
+        "alt-sca-log4j-2": "groupid-for-CVE-2022-23305",
+    }
 
     def fake_trigger_ai_triage(request):
         trigger_call_count[0] += 1
@@ -232,12 +242,17 @@ def install_fakes(resolver: TriageResolver) -> None:
                 "[FAKE] POST /api/ai-triage/triage  scanID=%s  scannerType=%s  resultIDs=%s",
                 request.scanID, bucket.scannerType, bucket.resultIDs,
             )
+            for result_id in bucket.resultIDs:
+                triggered_group_ids.add(alternate_id_to_group_id[result_id])
         triage_id = f"triage-batch-{trigger_call_count[0]}"
         fake_logger.info("[FAKE]   -> 202 Accepted, triageID=%s", triage_id)
         return AiTriageResponse(scanID=request.scanID, status="accepted", triageID=triage_id, published=True)
 
     def fake_retrieve_ai_triage_results(project_id, group_id):
         fake_logger.info("[FAKE] GET /api/ai-triage/triage/%s/%s", project_id, group_id)
+        if group_id not in triggered_group_ids:
+            fake_logger.info("[FAKE]   -> triageStatus=NOT_TRIAGED (nothing triggered yet)")
+            return AiTriageResult(triageStatus="NOT_TRIAGED")
         result = POLL_RESULTS_BY_GROUP_ID[group_id]
         fake_logger.info(
             "[FAKE]   -> triageStatus=%s reachability=%s exploitability=%s",
@@ -300,6 +315,27 @@ def main():
     for issue_key, body in jira_client.comments:
         print(f"\n--- comment on {issue_key} ---")
         print(body)
+
+    logger.info(
+        "=== Step 4: re-run the same jobs (simulating a retry/re-dispatch) — "
+        "expect every trigger to be skipped this time ==="
+    )
+    rerun_outcomes = run_pipeline(jobs, resolver, jira_client, poll=True, post_comment=True)
+    for o in rerun_outcomes:
+        logger.info(
+            "%s  cve/hash=%s  status=%s  triggerSkipped=%s  commentPosted=%s",
+            o.job.ticket_key, o.job.cve_id or o.job.result_hash,
+            o.status, bool(o.trigger_skipped_reason), o.comment_posted,
+        )
+    assert all(o.trigger_skipped_reason for o in rerun_outcomes), (
+        "expected every re-run outcome to skip triggering"
+    )
+    assert len(jira_client.comments) == 8, "expected 4 more comments posted on the re-run"
+    logger.info(
+        "Re-run triggered 0 new POST /api/ai-triage/triage calls (all 4 results already "
+        "had one) and still posted 4 more comments (%d total) from the pre-existing results.",
+        len(jira_client.comments),
+    )
 
 
 if __name__ == "__main__":
