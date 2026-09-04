@@ -22,15 +22,16 @@ README's "Authentication" section).
   Store it in Jira Automation's secret/connection vault rather than pasting
   it as a literal header value if your Jira plan supports that; otherwise
   keep the raw token out of anywhere the rule's audit log might be shared.
-- The Jira **custom field IDs** this tool needs (`customfield_10207` for
-  the scan ID, `customfield_10208` for the first SAST result ID,
-  `customfield_10209` for the SCA package name/version, in this Jira
-  site/project) are configured as `JIRA_FIELD_*` env vars where
-  `cxone-ai-triage` runs, **not** in this Automation rule. Custom field IDs
-  are **not portable across Jira sites** — if you're setting this up
-  somewhere else, look up the right IDs first (Project settings → Fields,
-  or `GET /rest/api/3/field` on that site) rather than reusing these
-  verbatim.
+- The Jira **custom field IDs** this tool needs — in this Jira site/project:
+  `customfield_10207` (scan ID), `customfield_10208`/`customfield_10210`/
+  `customfield_10211`/`customfield_10212`/`customfield_10213` (the five
+  SAST result ID fields, `VulnerabilityId1`-`5` — note they aren't
+  sequential field IDs), `customfield_10209` (SCA package name/version) —
+  are configured as `JIRA_FIELD_*` env vars where `cxone-ai-triage` runs,
+  **not** in this Automation rule. Custom field IDs are **not portable
+  across Jira sites** — if you're setting this up somewhere else, look up
+  the right IDs first (Project settings → Fields, or
+  `GET /rest/api/3/field` on that site) rather than reusing these verbatim.
 
 ## Step 1 — Trigger
 
@@ -74,6 +75,10 @@ which:
 ```bash
 JIRA_FIELD_SCAN_ID=customfield_10207
 JIRA_FIELD_VULNERABILITY_ID_1=customfield_10208
+JIRA_FIELD_VULNERABILITY_ID_2=customfield_10210
+JIRA_FIELD_VULNERABILITY_ID_3=customfield_10211
+JIRA_FIELD_VULNERABILITY_ID_4=customfield_10212
+JIRA_FIELD_VULNERABILITY_ID_5=customfield_10213
 JIRA_FIELD_PACKAGE_NAME_VERSION=customfield_10209
 ```
 
