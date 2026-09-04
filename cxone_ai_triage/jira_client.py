@@ -28,11 +28,11 @@ def _field_name(field_obj) -> Optional[str]:
 @dataclass
 class JiraFieldMapping:
     """Which Jira custom field ID holds which piece of structured data this
-    tool needs, for JiraCommentClient.get_issue_for_triage's "issue_key
-    only" path: instead of a Jira Automation rule mapping each custom field
-    into client_payload.jira_issue itself (one line per field, every time a
-    field is added), the Automation rule sends just the ticket key and this
-    tool fetches + maps the fields on this side instead.
+    tool needs. The Jira Automation rule only ever sends
+    client_payload.issue_key; JiraCommentClient.get_issue_for_triage fetches
+    the ticket itself and needs this mapping to know which custom field is
+    which, so the Automation rule never has to maintain a field-by-field
+    mapping of its own.
 
     Custom field IDs are not portable across Jira sites — see
     docs/jira-automation-setup.md for how to look them up. Any field left
@@ -80,9 +80,10 @@ class JiraCommentClient:
 
     def get_issue_for_triage(self, issue_key: str, field_mapping: JiraFieldMapping) -> dict:
         """Fetch one ticket and its subtasks via the Jira REST API, shaped
-        into the same dict jira_parser.parse_jira_issue expects from
-        client_payload.jira_issue - the "issue_key only" alternative to a
-        Jira Automation rule building that shape itself.
+        into the dict jira_parser.parse_jira_issue expects - this is how
+        every ticket gets turned into that shape, since the Jira Automation
+        rule only ever dispatches client_payload.issue_key (see
+        docs/jira-automation-setup.md).
         """
         issue = self._client.issue(issue_key)
         fields = issue.fields
@@ -138,9 +139,13 @@ class JiraCommentClient:
 def build_jira_client_from_env() -> Optional[JiraCommentClient]:
     """Build a JiraCommentClient from JIRA_SERVER / JIRA_EMAIL / JIRA_API_TOKEN.
 
-    Returns None (after logging why) if any are missing, so the rest of the
-    pipeline (resolving identifiers, triggering AI Triage, polling for the
-    result) still runs without posting anything back to Jira.
+    Returns None (after logging why) if any are missing. In --input mode
+    (cli.py), that just means the rest of the pipeline (resolving
+    identifiers, triggering AI Triage, polling for the result) runs without
+    posting anything back to Jira. In the default --github-event mode, the
+    caller treats None as fatal instead, since without these there's no way
+    to fetch the ticket client_payload.issue_key points at in the first
+    place.
     """
     server = os.environ.get("JIRA_SERVER")
     email = os.environ.get("JIRA_EMAIL")

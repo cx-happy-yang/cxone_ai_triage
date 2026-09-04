@@ -11,8 +11,8 @@ account behind the token needs, and — just as importantly — what it
 
 | Call | Jira REST API | Needs |
 |---|---|---|
-| `JIRA.issue(key)` (`get_issue_for_triage`, `issue_key`-only payload path) | `GET /rest/api/2/issue/{key}` | **Browse Projects** on the ticket's project |
-| `JIRA.search_issues('parent = "<key>"')` (subtasks, same path) | `GET /rest/api/2/search` | **Browse Projects** on the ticket's project |
+| `JIRA.issue(key)` (`get_issue_for_triage`) | `GET /rest/api/2/issue/{key}` | **Browse Projects** on the ticket's project |
+| `JIRA.search_issues('parent = "<key>"')` (subtasks) | `GET /rest/api/2/search` | **Browse Projects** on the ticket's project |
 | `JIRA.comments(issue)` (duplicate-comment check) | `GET /rest/api/2/issue/{key}/comment` | **Browse Projects** (comment visibility follows issue visibility, unless a comment has its own security level restricting it further) |
 | `JIRA.add_comment(issue, body)` | `POST /rest/api/2/issue/{key}/comment` | **Add Comments** on the ticket's project |
 
