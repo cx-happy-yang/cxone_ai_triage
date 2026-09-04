@@ -162,6 +162,39 @@ class TestGetIssueForTriage(unittest.TestCase):
             "url": "https://example.atlassian.net/browse/JVL-26",
         }])
 
+    def test_logs_the_fetched_ticket_and_every_subtask(self):
+        # With client_payload only ever carrying issue_key, the old
+        # workflow-side diagnostic logging of the ticket's fields and every
+        # subtask (see git history of examples/prudential-cxone-ai-triage.yaml)
+        # has nowhere else to happen - get_issue_for_triage does it instead,
+        # so it's visible regardless of which workflow calls this.
+        fields = SimpleNamespace(
+            summary="Parent", description="", status=None, priority=None,
+            issuetype=None, project=None, reporter=None, assignee=None,
+            labels=None, created="c", updated="u",
+            customfield_10207="scan-1",
+        )
+        issue = SimpleNamespace(key="JVL-20", fields=fields)
+        subtask = SimpleNamespace(
+            key="JVL-26",
+            fields=SimpleNamespace(
+                summary="SCA | CVE-2015-4852", status=_named("To Do"),
+                assignee=_person("dev@example.com"), created="2026-08-20T00:00:00.000+0000",
+            ),
+        )
+        client = _make_client(issue, subtask_objs=[subtask])
+        mapping = JiraFieldMapping(scan_id="customfield_10207")
+
+        with self.assertLogs("cxone_ai_triage", level="INFO") as cm:
+            client.get_issue_for_triage("JVL-20", mapping)
+
+        joined = "\n".join(cm.output)
+        self.assertIn("scanId=scan-1", joined)
+        self.assertIn("fetched 1 subtask(s)", joined)
+        self.assertIn("key=JVL-26", joined)
+        self.assertIn("summary=SCA | CVE-2015-4852", joined)
+        self.assertIn("assignee=dev@example.com", joined)
+
     def test_subtask_with_no_assignee_does_not_raise(self):
         fields = SimpleNamespace(
             summary="Parent", description="", status=None, priority=None,
