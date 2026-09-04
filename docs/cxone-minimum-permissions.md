@@ -23,60 +23,83 @@ It never creates, deletes, or scans a project, never changes a result's
 severity/state itself, and never touches presets, queries, reports, or
 tenant settings. Only one call is a write: triggering AI Triage.
 
-## Recommended: a custom role with exactly these permissions
+## Confirmed minimum (live-tested)
 
-Checkmarx One's [Predefined Roles and Permissions List](https://docs.checkmarx.com/en/34965-338142-predefined-roles-and-permissions-list.html)
-don't include a role scoped this narrowly — the built-in roles are meant
-for human users doing much more than this tool does (see "Built-in roles
-compared" below). Create a **custom role** in the IAM console (Managing
-Roles → New Role) with just:
+Prudential has confirmed empirically (2026-09, against a real tenant) that
+Checkmarx One's AI Triage actually requires a noticeably broader set than
+this tool's own read/write call list (above) suggested — it's not just
+"read the data + `update-risk-management`" (see "Earlier guess" below for
+that narrower attempt, superseded by this). The confirmed working minimum:
 
-| Permission | Why |
+Assign the **`ai-triage-assist` composite role**, which bundles:
+
+- `view-projects`
+- `view-results`
+- `update-result`
+- `update-result-states`
+- `update-result-severity`
+- `update-result-not-exploitable`
+- `update-result-state-not-exploitable`
+- `update-result-state-propose-not-exploitable`
+- `add-notes`
+
+...plus grant these individually, since they're **not** part of that
+composite role:
+
+- `view-scans`
+- `view-risk-management`
+- `view-risk-management-dashboard`
+- `view-risk-management-tab`
+- `update-risk-management`
+- `access-iam`
+
+Notably, most of what `ai-triage-assist` bundles are result-*state*-changing
+permissions (`update-result-severity`, `update-result-not-exploitable`,
+`update-result-state-*`, `add-notes`), not read-only or risk-management
+permissions — AI Triage evidently updates the underlying result's state
+directly (not just a separate risk-management record) when it assigns a
+verdict, which the earlier guess below didn't anticipate.
+
+## Earlier (unconfirmed) guess — superseded by the list above
+
+Before live testing, this tool's own read/write call list (above) suggested
+a much narrower custom role would suffice:
+
+| Permission | Why it was guessed |
 |---|---|
-| `view-projects` | resolving a scan's project (`GET /api/scans/{scanId}` returns a project ID; some result/risk lookups are project-scoped) |
+| `view-projects` | resolving a scan's project |
 | `view-scans` | `GET /api/scans/{scanId}` |
 | `view-results` | `GET /api/sast-results`, `GET /api/results` |
-| `view-risk-management` | `GET /api/risks`, and reading back a triage verdict via `GET /api/ai-triage/triage/{projectId}/{groupId}` |
-| `update-risk-management` | triggering AI Triage (`POST /api/ai-triage/triage`) — see caveat below |
+| `view-risk-management` | `GET /api/risks`, polling `GET /api/ai-triage/triage/{projectId}/{groupId}` |
+| `update-risk-management` | triggering AI Triage (`POST /api/ai-triage/triage`) |
 
-Assign this role to the OAuth client (or to the user identity backing it,
-depending on how your tenant issues OAuth clients).
-
-**Caveat on `update-risk-management`:** as of this writing, Checkmarx's
-public docs don't list a permission named specifically for AI Triage —
-triggering it is inferred to need a *write* permission on risk data, since
-it assigns a triage verdict to a vulnerability (the same category of action
-as changing a result's state), and `update-risk-management` is the closest
-documented match (it's part of the `ast-risk-manager` role, alongside
-`update-result-states` and similar). **Verify this empirically**: run the
-tool with just the five permissions above; if `POST /api/ai-triage/triage`
-comes back `403`, that's the signal this assumption was wrong and the role
-needs broadening (see the built-in `ast-risk-manager` role below as the
-next thing to try).
+This was wrong (or at least badly incomplete) — the confirmed list above is
+what actually works. Left here only so it's clear what changed and why;
+don't use this shorter list.
 
 ## Built-in roles compared
-
-If a custom role isn't an option on your tenant, here's how the closest
-predefined roles compare (broader than necessary, but documented):
 
 - **`ast-viewer`** — read-only: `view-applications`, `view-engines`,
   `view-preset`, `view-project-params`, `view-projects`, `view-queries`,
   `view-results`, `view-risk-management`, `view-scans`,
-  `view-tenant-params`, plus some analytics/report permissions. Covers
-  every *read* call this tool makes, but **not** the trigger call — expect
-  `403` on `POST /api/ai-triage/triage` with only this role.
+  `view-tenant-params`, plus some analytics/report permissions. Covers the
+  view-only items in the confirmed list above, but not `ai-triage-assist`
+  or any of the `update-*`/`add-notes`/`access-iam` items — expect `403`
+  on `POST /api/ai-triage/triage` with only this role.
 - **`ast-risk-manager`** — read/write, includes `view-risk-management` and
   `update-risk-management` plus a lot this tool never uses:
   `create-project`, `delete-project`, `create-scan`, `delete-scan`,
-  `update-scan`, `create-preset`/`delete-preset`, `update-severity`,
-  `update-result-states`, `update-sca-license`, `update-sca-state`, etc.
-  This is the safest documented fallback if the custom role above turns
-  out to be missing a permission — it's a superset, not a mismatch — but
-  it grants this OAuth client far more than it needs (e.g. it could delete
-  scans and projects).
+  `update-scan`, `create-preset`/`delete-preset`, `update-sca-license`,
+  `update-sca-state`, etc. Still doesn't include `ai-triage-assist` or
+  `access-iam`. Broader than necessary in some directions (it could delete
+  scans and projects) and still short in others.
 - **`plugin-scanner`** / **`ast-scanner`** — for CI/CD plugins that trigger
   scans and read results; irrelevant here since this tool never scans
-  anything, and unnecessarily broad for what it does.
+  anything.
+
+None of the predefined roles line up exactly with the confirmed list — a
+custom role (or `ai-triage-assist` plus the remaining individual
+permissions listed above) is the practical way to grant exactly this set.
 
 ## Resource-level authorization (if your tenant has this enabled)
 
