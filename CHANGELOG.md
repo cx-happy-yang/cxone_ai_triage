@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `client_payload.issue_key` is now a supported alternative to
+  `client_payload.jira_issue`: the Jira Automation rule can send just the
+  ticket key, and `cxone_ai_triage` fetches the full ticket (and its
+  subtasks, via a JQL search) itself via the Jira REST API instead
+  (`JiraCommentClient.get_issue_for_triage`), shaping it into the same dict
+  `jira_parser.py` already expects. Which custom field is which is
+  configured via new `JIRA_FIELD_SCAN_ID` / `JIRA_FIELD_VULNERABILITY_ID_1..5`
+  / `JIRA_FIELD_PACKAGE_NAME_VERSION` env vars (`JiraFieldMapping`), so the
+  Automation rule no longer has to maintain a field-by-field mapping (or be
+  touched again when a new custom field is needed). See
+  `docs/jira-automation-setup.md`'s "Alternative: send just the issue key".
+
 ## [0.2.5]
 
 ### Fixed

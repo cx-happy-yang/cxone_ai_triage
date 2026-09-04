@@ -3,9 +3,22 @@
 This document configures the Jira Automation rule that fires the
 `repository_dispatch` GitHub Actions event `cxone-ai-triage` consumes (see
 `cxone_ai_triage/github_event.py` / `jira_parser.py` and
-`.github/workflows/` in the repo root). The rule has two actions: **Create
-Variable** (builds the subtasks array) and **Send Web Request** (fires the
-dispatch).
+`.github/workflows/` in the repo root).
+
+There are two ways to set this rule up:
+
+- **Option A (this document, Steps 1–4 below):** the rule builds
+  `client_payload.jira_issue` itself, field-by-field, with a **Create
+  Variable** action (builds the subtasks array) and a **Send Web Request**
+  action (fires the dispatch). Every custom field this tool needs has to be
+  added to the rule's JSON body by hand, and kept in sync if fields change.
+- **Option B (see "Alternative: send just the issue key" at the end):** the
+  rule sends only `client_payload.issue_key`; `cxone_ai_triage` fetches the
+  full ticket (and its subtasks) itself via the Jira REST API. The rule
+  never needs updating again, even for new custom fields — the field-ID
+  mapping moves into `JIRA_FIELD_*` env vars on the GitHub Actions side
+  instead. Recommended if maintaining the field-by-field mapping in the
+  Automation rule itself has become a burden.
 
 ## Prerequisites
 
@@ -136,3 +149,47 @@ for the CVE (or, absent that, a bare `CVE-\d{4}-\d+` match in the
 description) since there's no VulnerabilityId equivalent for CVEs;
 `packageNameVersion` is applied to every SCA job from a ticket regardless
 of which path found the CVE.
+
+## Alternative: send just the issue key
+
+Instead of Steps 2–3 above, the Send Web Request action's custom data can
+be just:
+
+```json
+{
+  "event_type": "cxone-ai-triage",
+  "client_payload": {
+    "issue_key": "{{issue.key.jsonEncode}}"
+  }
+}
+```
+
+No Create Variable action needed either — `cxone_ai_triage` fetches the
+ticket (`GET /rest/api/2/issue/{key}`) and its subtasks (a JQL search for
+`parent = {key}`, which returns the fuller shape including assignee/created
+that the parent's own `fields.subtasks` doesn't carry) itself, via
+`JiraCommentClient.get_issue_for_triage` (`cxone_ai_triage/jira_client.py`),
+and shapes them into the exact same `jira_issue` dict Option A's Automation
+rule builds by hand. `jira_parser.py` then behaves identically either way.
+
+This rule never needs updating again for a new/changed custom field — the
+mapping instead lives in `JIRA_FIELD_*` environment variables on whatever
+runs `cxone-ai-triage` (see the README's "Authentication" section):
+
+```bash
+JIRA_FIELD_SCAN_ID=customfield_10207
+JIRA_FIELD_VULNERABILITY_ID_1=customfield_10208
+JIRA_FIELD_PACKAGE_NAME_VERSION=customfield_10209
+```
+
+Trade-offs versus Option A:
+
+- Requires `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` unconditionally,
+  since they're how the ticket gets fetched at all, not just how comments
+  get posted — `--no-comment` still works with `issue_key`, it just still
+  needs Jira *read* access to fetch the ticket in the first place. Option A
+  can run comment-less with zero Jira credentials, since the full ticket is
+  already in the event payload.
+- One extra Jira API round-trip per run (fetching the ticket + its
+  subtasks) versus zero for Option A, which already has everything in the
+  dispatch payload.

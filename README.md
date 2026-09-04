@@ -9,11 +9,20 @@ the [`jira`](https://pypi.org/project/jira/) package.
 ## Why this exists
 
 Prudential dispatches this tool as a GitHub Actions `repository_dispatch`
-event carrying the raw Jira ticket (`client_payload.jira_issue`). The
-Automation rule that builds this payload is documented in
-[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md); the
-identifiers `cxone_ai_triage/jira_parser.py` needs come from two places,
-checked in this order:
+event carrying the Jira ticket, in one of two shapes:
+
+- `client_payload.jira_issue` — the Automation rule builds the full
+  structured object itself, one custom field at a time. Documented in
+  [`docs/jira-automation-setup.md`](docs/jira-automation-setup.md).
+- `client_payload.issue_key` — just the ticket key (e.g. `"JVL-20"`); this
+  tool fetches the full ticket (and its subtasks) itself via the Jira REST
+  API instead, using `JIRA_FIELD_*` env vars to know which custom field is
+  which (see "Authentication" below). Lets the Automation rule skip
+  maintaining a field-by-field mapping — and skip re-touching it every time
+  a new custom field is needed — entirely.
+
+Either way, the identifiers `cxone_ai_triage/jira_parser.py` needs come from
+two places in the resulting structured object, checked in this order:
 
 1. **Structured fields on the payload**, when present:
    - `scanId` — a custom field holding the scan ID directly.
@@ -234,6 +243,27 @@ If any of these are unset, the tool still resolves identifiers, triggers AI
 Triage, and polls for the result — it just skips posting a comment
 (`comment_posted: false` in the output, no error).
 
+These same three are **required** (not optional) when `client_payload` only
+carries `issue_key` instead of the full `jira_issue` — without them there's
+no way to fetch the ticket at all, and the run fails fast with a clear error
+rather than silently finding zero jobs.
+
+`JIRA_FIELD_*` — only needed for the `issue_key` path, to map this tool's
+own field names onto this Jira site's custom field IDs (`JiraFieldMapping`
+in `jira_client.py`; unset ones are simply left out of the fetched ticket,
+same as if the field were blank):
+
+```bash
+export JIRA_FIELD_SCAN_ID=customfield_10207
+export JIRA_FIELD_VULNERABILITY_ID_1=customfield_10208
+# ...VULNERABILITY_ID_2 through _5, if this ticket template uses them
+export JIRA_FIELD_PACKAGE_NAME_VERSION=customfield_10209
+```
+
+Custom field IDs aren't portable across Jira sites — see
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md) for how to
+look them up on a given site.
+
 ## Usage
 
 Production mode — no arguments needed. Reads the Jira ticket from the
@@ -249,6 +279,15 @@ locally):
 
 ```bash
 python main.py -e samples/github_event.sample.json -o triage_results.json
+```
+
+If the event's `client_payload` only has `issue_key` instead of `jira_issue`
+(see "Why this exists" above), the same command fetches the ticket itself —
+just needs `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` (and usually
+`JIRA_FIELD_*`) set first:
+
+```bash
+python main.py -e samples/github_event_issue_key.sample.json -o triage_results.json
 ```
 
 Local/manual testing mode — a batch JSON/CSV of already-structured rows,
@@ -269,7 +308,8 @@ python main.py -i samples/input.sample.json -o triage_results.json
 
 See `samples/input.sample.json` / `samples/input.sample.csv` /
 `samples/github_event.sample.json` (SAST) / `samples/github_event_sca.sample.json`
-(SCA, with subtasks).
+(SCA, with subtasks) / `samples/github_event_issue_key.sample.json`
+(`issue_key` instead of a full `jira_issue`).
 
 Output is a JSON/CSV report with the resolved `project_id`, `similarity_id`,
 `alternate_id`, `group_id`, the `triage_id` returned by the trigger call (or
