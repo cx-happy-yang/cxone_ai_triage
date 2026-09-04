@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0]
 
 ### Added
 - `JiraCommentClient.get_issue_for_triage` now logs the fetched ticket's
