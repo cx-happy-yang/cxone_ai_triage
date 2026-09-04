@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- `JiraCommentClient.get_issue_for_triage` now logs the fetched ticket's
+  key fields (`scanId`, `VulnerabilityId1..5`, `packageNameVersion`) and
+  every subtask it found (key/summary/status/assignee) — restoring the
+  visibility the old `client_payload.jira_issue`-era workflow's dedicated
+  diagnostic-logging steps used to provide on the GitHub Actions side,
+  which had nothing to replace it once that payload shape was removed.
+
 ### Removed
 - **Breaking:** `client_payload.jira_issue` (the Jira Automation rule
   building the full structured ticket itself, field-by-field) is no longer

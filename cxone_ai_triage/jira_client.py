@@ -113,6 +113,23 @@ class JiraCommentClient:
         if field_mapping.package_name_version:
             jira_issue["packageNameVersion"] = getattr(fields, field_mapping.package_name_version, None)
 
+        # Equivalent to the diagnostic logging the old jira_issue-payload
+        # workflow used to do on the GitHub Actions side (see git history
+        # of examples/prudential-cxone-ai-triage.yaml) - now done here
+        # instead, so it shows up regardless of which workflow calls this.
+        logger.info(
+            "%s: summary=%r scanId=%s VulnerabilityId1-5=%s packageNameVersion=%s",
+            issue.key, jira_issue.get("summary"), jira_issue.get("scanId"),
+            [jira_issue.get(f"VulnerabilityId{i}") for i in range(1, 6)],
+            jira_issue.get("packageNameVersion"),
+        )
+        logger.info("%s: fetched %d subtask(s)", issue.key, len(jira_issue["subtasks"]))
+        for sub in jira_issue["subtasks"]:
+            logger.info(
+                "Subtask >> key=%s | summary=%s | status=%s | assignee=%s",
+                sub["key"], sub["summary"], sub["status"], sub["assignee"],
+            )
+
         return jira_issue
 
     def _get_subtasks(self, parent_key: str) -> List[dict]:
