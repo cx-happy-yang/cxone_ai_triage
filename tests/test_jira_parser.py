@@ -1,6 +1,9 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from cxone_ai_triage.github_event import load_jira_issue
+from cxone_ai_triage.github_event import load_jira_issue, load_jira_issue_or_key
 from cxone_ai_triage.jira_parser import parse_jira_issue
 
 SAST_DESCRIPTION = (
@@ -203,6 +206,28 @@ class TestParseJiraIssue(unittest.TestCase):
         self.assertEqual(issue["key"], "JVL-2")
         jobs = parse_jira_issue(issue)
         self.assertEqual(jobs[0].scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+
+    def test_load_jira_issue_or_key_returns_the_full_issue_when_present(self):
+        jira_issue, issue_key = load_jira_issue_or_key("samples/github_event.sample.json")
+        self.assertEqual(jira_issue["key"], "JVL-2")
+        self.assertIsNone(issue_key)
+
+    def test_load_jira_issue_or_key_returns_just_the_key_when_thats_all_thats_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = Path(tmp) / "event.json"
+            event_path.write_text(json.dumps(
+                {"client_payload": {"issue_key": "JVL-20"}}
+            ))
+            jira_issue, issue_key = load_jira_issue_or_key(str(event_path))
+        self.assertIsNone(jira_issue)
+        self.assertEqual(issue_key, "JVL-20")
+
+    def test_load_jira_issue_or_key_raises_when_neither_is_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = Path(tmp) / "event.json"
+            event_path.write_text(json.dumps({"client_payload": {}}))
+            with self.assertRaises(ValueError):
+                load_jira_issue_or_key(str(event_path))
 
     def test_jira_meta_is_carried_through_without_affecting_resolution(self):
         jobs = parse_jira_issue(

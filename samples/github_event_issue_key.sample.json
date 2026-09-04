@@ -1,0 +1,6 @@
+{
+    "action": "cxone-ai-triage",
+    "client_payload": {
+        "issue_key": "JVL-2"
+    }
+}

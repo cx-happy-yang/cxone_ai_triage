@@ -1,4 +1,4 @@
-"""Posts AI Triage results as comments on the originating Jira ticket/subtask.
+"""Reads Jira tickets and posts AI Triage results back as comments.
 
 Uses the `jira` PyPI package (https://pypi.org/project/jira/) with its
 default rest_api_version ("2"). Jira Cloud still serves /rest/api/2/, which
@@ -9,19 +9,64 @@ as {"body": body} with no ADF conversion.
 """
 import logging
 import os
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 from jira import JIRA
 
 logger = logging.getLogger("cxone_ai_triage")
 
 
+def _person_email(person) -> Optional[str]:
+    return getattr(person, "emailAddress", None) if person else None
+
+
+def _field_name(field_obj) -> Optional[str]:
+    return getattr(field_obj, "name", None) if field_obj else None
+
+
+@dataclass
+class JiraFieldMapping:
+    """Which Jira custom field ID holds which piece of structured data this
+    tool needs, for JiraCommentClient.get_issue_for_triage's "issue_key
+    only" path: instead of a Jira Automation rule mapping each custom field
+    into client_payload.jira_issue itself (one line per field, every time a
+    field is added), the Automation rule sends just the ticket key and this
+    tool fetches + maps the fields on this side instead.
+
+    Custom field IDs are not portable across Jira sites — see
+    docs/jira-automation-setup.md for how to look them up. Any field left
+    unset here is simply left out of the fetched jira_issue dict; jira_parser
+    already tolerates a missing scanId/VulnerabilityId/packageNameVersion
+    (falling back to the description regex, or — for packageNameVersion —
+    just omitting it from the comment).
+    """
+
+    scan_id: Optional[str] = None
+    vulnerability_ids: Tuple[Optional[str], ...] = field(default_factory=lambda: (None,) * 5)
+    package_name_version: Optional[str] = None
+
+    @classmethod
+    def from_env(cls) -> "JiraFieldMapping":
+        """JIRA_FIELD_SCAN_ID, JIRA_FIELD_VULNERABILITY_ID_1..5,
+        JIRA_FIELD_PACKAGE_NAME_VERSION - e.g. JIRA_FIELD_SCAN_ID=customfield_10207."""
+        return cls(
+            scan_id=os.environ.get("JIRA_FIELD_SCAN_ID"),
+            vulnerability_ids=tuple(
+                os.environ.get(f"JIRA_FIELD_VULNERABILITY_ID_{i}") for i in range(1, 6)
+            ),
+            package_name_version=os.environ.get("JIRA_FIELD_PACKAGE_NAME_VERSION"),
+        )
+
+
 class JiraCommentClient:
     """Thin wrapper around the `jira` package, scoped to what this tool
-    needs: reading and posting comments on an issue (a ticket or a subtask
-    key both work identically)."""
+    needs: reading a ticket (and its subtasks) and its comments, and
+    posting a new comment (a ticket or a subtask key both work identically
+    for comments)."""
 
     def __init__(self, server: str, email: str, api_token: str):
+        self._server = server.rstrip("/")
         self._client = JIRA(server=server, basic_auth=(email, api_token))
 
     def add_comment(self, issue_key: str, body: str) -> None:
@@ -32,6 +77,62 @@ class JiraCommentClient:
         """Every existing comment's body text on this issue, for checking
         before posting a new one (see pipeline.py's duplicate check)."""
         return [c.body for c in self._client.comments(issue_key) if getattr(c, "body", None)]
+
+    def get_issue_for_triage(self, issue_key: str, field_mapping: JiraFieldMapping) -> dict:
+        """Fetch one ticket and its subtasks via the Jira REST API, shaped
+        into the same dict jira_parser.parse_jira_issue expects from
+        client_payload.jira_issue - the "issue_key only" alternative to a
+        Jira Automation rule building that shape itself.
+        """
+        issue = self._client.issue(issue_key)
+        fields = issue.fields
+
+        jira_issue = {
+            "key": issue.key,
+            "summary": fields.summary,
+            "description": fields.description or "",
+            "status": _field_name(fields.status),
+            "priority": _field_name(fields.priority),
+            "issue_type": _field_name(fields.issuetype),
+            "project": getattr(fields.project, "key", None) if fields.project else None,
+            "reporter": _person_email(fields.reporter),
+            "assignee": _person_email(fields.assignee),
+            "labels": list(fields.labels or []),
+            "url": f"{self._server}/browse/{issue.key}",
+            "created": fields.created,
+            "updated": fields.updated,
+            "subtasks": self._get_subtasks(issue.key),
+        }
+
+        if field_mapping.scan_id:
+            jira_issue["scanId"] = getattr(fields, field_mapping.scan_id, None)
+        for i, field_id in enumerate(field_mapping.vulnerability_ids, start=1):
+            if field_id:
+                jira_issue[f"VulnerabilityId{i}"] = getattr(fields, field_id, None)
+        if field_mapping.package_name_version:
+            jira_issue["packageNameVersion"] = getattr(fields, field_mapping.package_name_version, None)
+
+        return jira_issue
+
+    def _get_subtasks(self, parent_key: str) -> List[dict]:
+        # A parent's own `fields.subtasks` (from GET /rest/api/2/issue) only
+        # carries a condensed shape (summary/status/issuetype, no assignee
+        # or created) - a JQL search gets the fuller shape jira_parser
+        # expects in one extra round-trip instead of one per subtask.
+        issues = self._client.search_issues(
+            f'parent = "{parent_key}"', fields="summary,status,assignee,created"
+        )
+        return [
+            {
+                "key": sub.key,
+                "summary": sub.fields.summary,
+                "status": _field_name(sub.fields.status),
+                "assignee": _person_email(sub.fields.assignee),
+                "created": sub.fields.created,
+                "url": f"{self._server}/browse/{sub.key}",
+            }
+            for sub in issues
+        ]
 
 
 def build_jira_client_from_env() -> Optional[JiraCommentClient]:

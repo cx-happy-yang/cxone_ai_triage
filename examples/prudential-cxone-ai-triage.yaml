@@ -6,10 +6,23 @@
 # against this event's payload ($GITHUB_EVENT_PATH, read automatically —
 # see the repo's README "Usage" section), and upload the result.
 #
+# client_payload can be either shape cxone-ai-triage supports (see
+# ../docs/jira-automation-setup.md and ../README.md "Why this exists"):
+#   a. { "jira_issue": {...} }  - the Jira Automation rule builds the full
+#      structured ticket itself, field-by-field.
+#   b. { "issue_key": "JVL-20" }  - just the ticket key; cxone-ai-triage
+#      fetches the full ticket (and its subtasks) itself via the Jira REST
+#      API instead, using the JIRA_FIELD_* env vars below to know which
+#      custom field is which. Nothing else in this workflow needs to
+#      change between the two - only which of the two logging steps below
+#      actually has anything to print.
+#
 # Required repo secrets (Settings -> Secrets and variables -> Actions, on
 # THIS repo, not cxone_ai_triage): CXONE_SERVER, CXONE_ACCESS_CONTROL_URL,
 # CXONE_TENANT_NAME, CXONE_CLIENT_ID, CXONE_CLIENT_SECRET, JIRA_SERVER,
-# JIRA_EMAIL, JIRA_API_TOKEN. See ../README.md "Authentication".
+# JIRA_EMAIL, JIRA_API_TOKEN. See ../README.md "Authentication" and
+# ../docs/cxone-minimum-permissions.md / ../docs/jira-minimum-permissions.md
+# for what to actually grant these credentials.
 
 name: CxOne AI Triage
 
@@ -21,7 +34,8 @@ jobs:
   triage:
     runs-on: ubuntu-latest
     steps:
-      - name: Log incoming Jira payload
+      - name: Log incoming Jira payload (jira_issue shape)
+        if: github.event.client_payload.jira_issue != null
         run: |
           echo "Jira Key: ${{ github.event.client_payload.jira_issue.key }}"
           echo "Summary: ${{ github.event.client_payload.jira_issue.summary }}"
@@ -37,7 +51,7 @@ jobs:
           echo "==== Subtasks raw payload ===="
           echo '${{ toJSON(github.event.client_payload.jira_issue.subtasks) }}'
 
-      - name: Iterate & print each subtask detail
+      - name: Iterate & print each subtask detail (jira_issue shape)
         if: github.event.client_payload.jira_issue.subtasks != '[]'
         run: |
           echo "==== List each subtask ===="
@@ -49,6 +63,12 @@ jobs:
             assignee=$(echo "$item" | jq -r '.assignee')
             echo "Subtask >> key=$key | summary=$summary | status=$status | assignee=$assignee"
           done
+
+      - name: Log incoming Jira payload (issue_key shape)
+        if: github.event.client_payload.issue_key != null
+        run: |
+          echo "Jira issue key: ${{ github.event.client_payload.issue_key }}"
+          echo "(cxone-ai-triage fetches the full ticket + subtasks itself - nothing more to log here)"
 
       - name: Download cxone-ai-triage
         run: |
@@ -67,6 +87,13 @@ jobs:
           JIRA_SERVER: ${{ secrets.JIRA_SERVER }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          # Only read on the issue_key payload shape (ignored otherwise) -
+          # not secret, so plain env vars rather than repo secrets. Custom
+          # field IDs are specific to this Jira site; see
+          # ../docs/jira-automation-setup.md for how to look them up.
+          JIRA_FIELD_SCAN_ID: customfield_10207
+          JIRA_FIELD_VULNERABILITY_ID_1: customfield_10208
+          JIRA_FIELD_PACKAGE_NAME_VERSION: customfield_10209
         run: ./cxone-ai-triage -o triage_results.json -v
 
       - name: Upload triage results
