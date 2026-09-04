@@ -1,23 +1,20 @@
 """CLI entry point.
 
-Three ways to feed it Jira ticket data:
+Two ways to feed it Jira ticket data:
 
-1. Production (default, zero extra args): reads the Jira ticket out of the
-   GitHub Actions `repository_dispatch` event at $GITHUB_EVENT_PATH. Two
-   shapes of client_payload are supported (see github_event.py):
-     a. `client_payload.jira_issue` — the full structured ticket, built
-        field-by-field by the Jira Automation rule.
-     b. `client_payload.issue_key` — just the ticket key; this tool fetches
-        the full ticket (and its subtasks) itself via the Jira REST API,
-        using JiraFieldMapping (JIRA_FIELD_* env vars) to know which custom
-        field is which. Lets the Automation rule skip maintaining a
-        field-by-field mapping entirely.
-   Either way, scan/result identifiers are then parsed out of the
-   structured fields (falling back to the free-text description). See
-   jira_parser.py.
+1. Production (default, zero extra args): reads client_payload.issue_key
+   out of the GitHub Actions `repository_dispatch` event at
+   $GITHUB_EVENT_PATH (see github_event.py), then fetches the full ticket
+   (and its subtasks) itself via the Jira REST API — using
+   JiraFieldMapping (JIRA_FIELD_* env vars) to know which custom field is
+   which — and parses scan/result identifiers out of the structured fields
+   (falling back to the free-text description). See jira_client.py /
+   jira_parser.py. Requires JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN even if
+   --no-comment is set, since without them there's no ticket to fetch.
 2. Local testing: `--input <file>` reads a batch JSON/CSV of already
    structured rows (see samples/input.sample.json). Useful for testing
-   against a known scan_id/result_hash without wiring up a real dispatch.
+   against a known scan_id/result_hash without wiring up a real dispatch,
+   and doesn't need Jira credentials at all unless posting a comment too.
 
 For each job it triggers AI Triage, then (unless --no-poll) polls for the
 finished verdict, then (unless --no-comment) posts it as a comment on the
@@ -33,8 +30,8 @@ CheckmarxPythonSDK, e.g. for an OAuth client (recommended for CI):
     CXONE_CLIENT_ID=<oauth client id>
     CXONE_CLIENT_SECRET=<oauth client secret>
 
-Jira comment posting (optional — omit to resolve/trigger/poll without
-posting anything back to Jira):
+Jira (required in the default --github-event mode; optional with --input,
+where omitting it just skips posting a comment):
     JIRA_SERVER=https://your-domain.atlassian.net
     JIRA_EMAIL=<service account email>
     JIRA_API_TOKEN=<API token>
@@ -43,7 +40,7 @@ import argparse
 import logging
 import sys
 
-from .github_event import load_jira_issue_or_key
+from .github_event import load_issue_key
 from .io_utils import load_jobs, write_outcomes
 from .jira_client import JiraFieldMapping, build_jira_client_from_env
 from .jira_parser import parse_jira_issue
@@ -69,11 +66,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     source.add_argument(
         "-e", "--github-event",
         help="Path to a GitHub Actions event JSON containing "
-             "client_payload.jira_issue (the full ticket) or "
-             "client_payload.issue_key (just the key - this tool fetches "
-             "the ticket itself via the Jira REST API; requires "
+             "client_payload.issue_key. This tool fetches the ticket "
+             "itself via the Jira REST API; requires "
              "JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN and, usually, "
-             "JIRA_FIELD_* to be set). Defaults to $GITHUB_EVENT_PATH when "
+             "JIRA_FIELD_* to be set. Defaults to $GITHUB_EVENT_PATH when "
              "neither this nor --input is given.",
     )
     parser.add_argument(
@@ -118,21 +114,18 @@ def main(argv=None) -> int:
         if args.input:
             jobs = load_jobs(args.input)
         else:
-            jira_issue, issue_key = load_jira_issue_or_key(args.github_event)
-            if jira_issue is None:
-                # client_payload only had an issue_key - fetch the full
-                # ticket ourselves instead of Jira Automation building it
-                # field-by-field. Needs Jira creds regardless of --no-comment,
-                # since without them there's no ticket data to parse at all.
-                jira_client = build_jira_client_from_env()
-                if jira_client is None:
-                    raise ValueError(
-                        f"client_payload.issue_key={issue_key!r} was given instead of "
-                        "client_payload.jira_issue, but JIRA_SERVER/JIRA_EMAIL/"
-                        "JIRA_API_TOKEN aren't fully set - can't fetch the ticket"
-                    )
-                logger.info("Fetching Jira ticket %s (issue_key payload)", issue_key)
-                jira_issue = jira_client.get_issue_for_triage(issue_key, JiraFieldMapping.from_env())
+            # Needs Jira creds regardless of --no-comment, since without
+            # them there's no ticket to fetch at all.
+            issue_key = load_issue_key(args.github_event)
+            jira_client = build_jira_client_from_env()
+            if jira_client is None:
+                raise ValueError(
+                    f"client_payload.issue_key={issue_key!r} was given, but "
+                    "JIRA_SERVER/JIRA_EMAIL/JIRA_API_TOKEN aren't fully set - "
+                    "can't fetch the ticket"
+                )
+            logger.info("Fetching Jira ticket %s", issue_key)
+            jira_issue = jira_client.get_issue_for_triage(issue_key, JiraFieldMapping.from_env())
             logger.info("Parsing Jira ticket %s", jira_issue.get("key"))
             jobs = parse_jira_issue(jira_issue)
     except (FileNotFoundError, ValueError) as e:

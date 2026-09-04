@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+- **Breaking:** `client_payload.jira_issue` (the Jira Automation rule
+  building the full structured ticket itself, field-by-field) is no longer
+  supported — `client_payload.issue_key` (added in 0.2.6) is now the only
+  supported payload shape. `cxone_ai_triage` always fetches the ticket (and
+  its subtasks) itself via the Jira REST API. `JIRA_SERVER`/`JIRA_EMAIL`/
+  `JIRA_API_TOKEN` are now required (not optional) in the default
+  `--github-event` mode, since without them there's no way to fetch the
+  ticket at all; they remain optional with `--input` (local batch testing).
+  `github_event.load_jira_issue`/`load_jira_issue_or_key` are replaced by
+  `load_issue_key`. `samples/github_event.sample.json` and
+  `samples/github_event_sca.sample.json` are removed;
+  `samples/github_event_issue_key.sample.json` is the only sample event
+  file now. `docs/jira-automation-setup.md` documents only the issue_key
+  setup.
+
 ## [0.2.6]
 
 ### Added

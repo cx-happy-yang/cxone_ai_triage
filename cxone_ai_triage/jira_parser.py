@@ -1,11 +1,13 @@
 """Extract scan/result identifiers out of a Jira ticket, preferring the
-structured fields Prudential's Jira Automation rule now sends directly
-(scanId, VulnerabilityId1..5) over regex-parsing the free-text description
-(Jira wiki markup, as produced by the Checkmarx Jira integration) — see
-docs/jira-automation-setup.md for the automation rule itself.
+structured fields (scanId, VulnerabilityId1..5) over regex-parsing the
+free-text description (Jira wiki markup, as produced by the Checkmarx Jira
+integration) — see docs/jira-automation-setup.md for how the ticket gets
+here in the first place.
 
-The Jira Automation "send web request" action posts client_payload.jira_issue
-with: key, summary, description, status, priority, issue_type, project,
+The Jira Automation rule dispatches only client_payload.issue_key; this
+tool fetches the ticket itself and shapes it into the jira_issue dict this
+module expects (see jira_client.JiraCommentClient.get_issue_for_triage):
+key, summary, description, status, priority, issue_type, project,
 reporter, assignee, labels, url, created, updated, subtasks, scanId,
 VulnerabilityId1..VulnerabilityId5, packageNameVersion. The non-identifier
 fields are carried straight through as jira_meta for traceability in the
@@ -25,7 +27,7 @@ ticket: `.../sast?result-id=XZBiE9xWT5WiRxxnpMKmKfZUJuA%3D`).
 
 SCA CVE identifier(s): each CVE lives on a *subtask*'s summary line, e.g.
 "SCA | CVE-2025-71329" — not a VulnerabilityId field. The parent's
-`subtasks` array (built by the automation's Create Variable action) is a
+`subtasks` array (fetched via a JQL search, see get_issue_for_triage) is a
 flat `{"key": ..., "summary": ..., "status": ..., "assignee": ..., "created":
 ..., "url": ...}` per subtask. A ticket with no `subtasks` field falls back
 to scanning the parent description directly for a CVE ID.

@@ -1,5 +1,5 @@
-"""Exercises cli.main()'s two client_payload shapes (jira_issue vs.
-issue_key) end to end, with TriageResolver/run_pipeline/Jira all faked out.
+"""Exercises cli.main()'s issue_key payload path end to end, with
+TriageResolver/run_pipeline/Jira all faked out.
 """
 import tempfile
 import unittest
@@ -21,10 +21,10 @@ SAST_JIRA_ISSUE = {
 
 
 class TestCliIssueKeyPayload(unittest.TestCase):
-    def _run(self, argv, jira_issue_or_key, jira_client=None):
+    def _run(self, argv, issue_key, jira_client=None):
         with tempfile.TemporaryDirectory() as tmp:
             output_path = str(Path(tmp) / "out.json")
-            with patch.object(cli, "load_jira_issue_or_key", return_value=jira_issue_or_key), \
+            with patch.object(cli, "load_issue_key", return_value=issue_key), \
                  patch.object(cli, "build_jira_client_from_env", return_value=jira_client), \
                  patch.object(cli, "TriageResolver") as MockResolver, \
                  patch.object(cli, "run_pipeline") as mock_run_pipeline:
@@ -39,7 +39,7 @@ class TestCliIssueKeyPayload(unittest.TestCase):
         fake_jira_client.get_issue_for_triage.return_value = SAST_JIRA_ISSUE
 
         rc, mock_run_pipeline = self._run(
-            ["-e", "irrelevant.json"], (None, "JVL-2"), jira_client=fake_jira_client,
+            ["-e", "irrelevant.json"], "JVL-2", jira_client=fake_jira_client,
         )
 
         self.assertEqual(rc, 0)
@@ -55,18 +55,20 @@ class TestCliIssueKeyPayload(unittest.TestCase):
 
     def test_issue_key_payload_without_jira_creds_fails_cleanly(self):
         rc, mock_run_pipeline = self._run(
-            ["-e", "irrelevant.json"], (None, "JVL-2"), jira_client=None,
+            ["-e", "irrelevant.json"], "JVL-2", jira_client=None,
         )
         self.assertEqual(rc, 2)
         mock_run_pipeline.assert_not_called()
 
-    def test_full_jira_issue_payload_does_not_need_a_jira_client_to_parse(self):
+    def test_no_comment_still_needs_jira_client_to_fetch_the_ticket(self):
+        # --no-comment only suppresses posting - fetching the ticket in the
+        # first place still needs Jira creds, since there's nothing else to
+        # parse it from.
         rc, mock_run_pipeline = self._run(
-            ["-e", "irrelevant.json", "--no-comment"], (SAST_JIRA_ISSUE, None), jira_client=None,
+            ["-e", "irrelevant.json", "--no-comment"], "JVL-2", jira_client=None,
         )
-        self.assertEqual(rc, 0)
-        jobs_passed = mock_run_pipeline.call_args[0][0]
-        self.assertEqual(jobs_passed[0].result_hash, "hash-xyz")
+        self.assertEqual(rc, 2)
+        mock_run_pipeline.assert_not_called()
 
 
 if __name__ == "__main__":

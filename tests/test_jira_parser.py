@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cxone_ai_triage.github_event import load_jira_issue, load_jira_issue_or_key
+from cxone_ai_triage.github_event import load_issue_key
 from cxone_ai_triage.jira_parser import parse_jira_issue
 
 SAST_DESCRIPTION = (
@@ -110,18 +110,6 @@ class TestParseJiraIssue(unittest.TestCase):
                 }
             )
 
-    def test_load_sca_sample_event_with_subtasks(self):
-        issue = load_jira_issue("samples/github_event_sca.sample.json")
-        jobs = parse_jira_issue(issue)
-        self.assertEqual(len(jobs), 2)
-        self.assertEqual({j.cve_id for j in jobs}, {"CVE-2021-44228", "CVE-2022-23305"})
-        # scanId field takes precedence over the description regex, and the
-        # subtasks are the real automation's flat shape (no "fields" nesting).
-        for j in jobs:
-            self.assertEqual(j.scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
-            self.assertEqual(j.jira_meta["package_name_version"], "log4j-core 2.14.1")
-            self.assertEqual(j.ticket_key, "JVL-10")  # parent, not the subtask
-
     def test_sca_subtasks_flat_shape_from_real_automation_rule(self):
         # "SCA | CVE-..." is the real subtask summary format (verified);
         # packageNameVersion is a field on the *parent* ticket (verified),
@@ -201,33 +189,25 @@ class TestParseJiraIssue(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_jira_issue({"key": "X-1", "description": description})
 
-    def test_load_jira_issue_from_sample_event_file(self):
-        issue = load_jira_issue("samples/github_event.sample.json")
-        self.assertEqual(issue["key"], "JVL-2")
-        jobs = parse_jira_issue(issue)
-        self.assertEqual(jobs[0].scan_id, "d01d7561-2bf5-48b2-bbaa-da166c671fc3")
+    def test_load_issue_key_from_sample_event_file(self):
+        issue_key = load_issue_key("samples/github_event_issue_key.sample.json")
+        self.assertEqual(issue_key, "JVL-2")
 
-    def test_load_jira_issue_or_key_returns_the_full_issue_when_present(self):
-        jira_issue, issue_key = load_jira_issue_or_key("samples/github_event.sample.json")
-        self.assertEqual(jira_issue["key"], "JVL-2")
-        self.assertIsNone(issue_key)
-
-    def test_load_jira_issue_or_key_returns_just_the_key_when_thats_all_thats_given(self):
+    def test_load_issue_key_returns_the_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             event_path = Path(tmp) / "event.json"
             event_path.write_text(json.dumps(
                 {"client_payload": {"issue_key": "JVL-20"}}
             ))
-            jira_issue, issue_key = load_jira_issue_or_key(str(event_path))
-        self.assertIsNone(jira_issue)
+            issue_key = load_issue_key(str(event_path))
         self.assertEqual(issue_key, "JVL-20")
 
-    def test_load_jira_issue_or_key_raises_when_neither_is_present(self):
+    def test_load_issue_key_raises_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             event_path = Path(tmp) / "event.json"
             event_path.write_text(json.dumps({"client_payload": {}}))
             with self.assertRaises(ValueError):
-                load_jira_issue_or_key(str(event_path))
+                load_issue_key(str(event_path))
 
     def test_jira_meta_is_carried_through_without_affecting_resolution(self):
         jobs = parse_jira_issue(

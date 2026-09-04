@@ -9,20 +9,18 @@ the [`jira`](https://pypi.org/project/jira/) package.
 ## Why this exists
 
 Prudential dispatches this tool as a GitHub Actions `repository_dispatch`
-event carrying the Jira ticket, in one of two shapes:
+event carrying just the ticket key: `client_payload.issue_key` (e.g.
+`"JVL-20"`). This tool fetches the full ticket (and its subtasks) itself
+via the Jira REST API (`JiraCommentClient.get_issue_for_triage`), using
+`JIRA_FIELD_*` env vars to know which custom field is which (see
+"Authentication" below) — so the Jira Automation rule that dispatches this
+event (documented in
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md)) never has
+to maintain a field-by-field mapping, or be touched again when a new
+custom field is needed.
 
-- `client_payload.jira_issue` — the Automation rule builds the full
-  structured object itself, one custom field at a time. Documented in
-  [`docs/jira-automation-setup.md`](docs/jira-automation-setup.md).
-- `client_payload.issue_key` — just the ticket key (e.g. `"JVL-20"`); this
-  tool fetches the full ticket (and its subtasks) itself via the Jira REST
-  API instead, using `JIRA_FIELD_*` env vars to know which custom field is
-  which (see "Authentication" below). Lets the Automation rule skip
-  maintaining a field-by-field mapping — and skip re-touching it every time
-  a new custom field is needed — entirely.
-
-Either way, the identifiers `cxone_ai_triage/jira_parser.py` needs come from
-two places in the resulting structured object, checked in this order:
+The identifiers `cxone_ai_triage/jira_parser.py` needs then come from two
+places in the resulting structured object, checked in this order:
 
 1. **Structured fields on the payload**, when present:
    - `scanId` — a custom field holding the scan ID directly.
@@ -236,7 +234,7 @@ logs that the default (each class calling `construct_configuration()`
 itself) means a separate token fetch per class actually used in a run (up
 to 4–5 extra round-trips).
 
-Jira comment posting is optional — read by `jira_client.py`:
+Read by `jira_client.py`:
 
 ```bash
 export JIRA_SERVER=https://your-domain.atlassian.net
@@ -244,19 +242,17 @@ export JIRA_EMAIL=<service account email>
 export JIRA_API_TOKEN=<API token, from id.atlassian.com/manage-profile/security/api-tokens>
 ```
 
-If any of these are unset, the tool still resolves identifiers, triggers AI
-Triage, and polls for the result — it just skips posting a comment
-(`comment_posted: false` in the output, no error).
+**Required** in the default `--github-event` mode (`client_payload` only
+ever carries `issue_key`, never the full ticket — without these there's no
+way to fetch it, and the run fails fast with a clear error rather than
+silently finding zero jobs). Only optional with `--input` (local batch
+testing, see "Usage" below): if unset there, the tool still resolves
+identifiers, triggers AI Triage, and polls for the result — it just skips
+posting a comment (`comment_posted: false` in the output, no error).
 
-These same three are **required** (not optional) when `client_payload` only
-carries `issue_key` instead of the full `jira_issue` — without them there's
-no way to fetch the ticket at all, and the run fails fast with a clear error
-rather than silently finding zero jobs.
-
-`JIRA_FIELD_*` — only needed for the `issue_key` path, to map this tool's
-own field names onto this Jira site's custom field IDs (`JiraFieldMapping`
-in `jira_client.py`; unset ones are simply left out of the fetched ticket,
-same as if the field were blank):
+`JIRA_FIELD_*` — maps this tool's own field names onto this Jira site's
+custom field IDs (`JiraFieldMapping` in `jira_client.py`; unset ones are
+simply left out of the fetched ticket, same as if the field were blank):
 
 ```bash
 export JIRA_FIELD_SCAN_ID=customfield_10207
@@ -271,9 +267,11 @@ look them up on a given site.
 
 ## Usage
 
-Production mode — no arguments needed. Reads the Jira ticket from the
-GitHub Actions `repository_dispatch` event at `$GITHUB_EVENT_PATH`
-(every job gets this env var automatically):
+Production mode — no arguments needed. Reads `client_payload.issue_key`
+from the GitHub Actions `repository_dispatch` event at `$GITHUB_EVENT_PATH`
+(every job gets this env var automatically), then fetches the ticket
+itself — needs `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` (and usually
+`JIRA_FIELD_*`) set first:
 
 ```bash
 python main.py -o triage_results.json
@@ -281,15 +279,6 @@ python main.py -o triage_results.json
 
 Or point at an event file explicitly (e.g. to replay a real dispatch payload
 locally):
-
-```bash
-python main.py -e samples/github_event.sample.json -o triage_results.json
-```
-
-If the event's `client_payload` only has `issue_key` instead of `jira_issue`
-(see "Why this exists" above), the same command fetches the ticket itself —
-just needs `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` (and usually
-`JIRA_FIELD_*`) set first:
 
 ```bash
 python main.py -e samples/github_event_issue_key.sample.json -o triage_results.json
@@ -312,9 +301,7 @@ python main.py -i samples/input.sample.json -o triage_results.json
 | `package_identifier` | SCA only, optional | disambiguates when the same CVE hits more than one package in the scan |
 
 See `samples/input.sample.json` / `samples/input.sample.csv` /
-`samples/github_event.sample.json` (SAST) / `samples/github_event_sca.sample.json`
-(SCA, with subtasks) / `samples/github_event_issue_key.sample.json`
-(`issue_key` instead of a full `jira_issue`).
+`samples/github_event_issue_key.sample.json`.
 
 Output is a JSON/CSV report with the resolved `project_id`, `similarity_id`,
 `alternate_id`, `group_id`, the `triage_id` returned by the trigger call (or
@@ -371,13 +358,12 @@ is the full pipeline for `happy-cook/JavaVulnerableLab`'s
 diagnostic-logging steps and adds downloading the released binary, running
 it (reads `$GITHUB_EVENT_PATH` automatically, no flags needed), and
 uploading `triage_results.json` as a workflow artifact. Needs the same
-`CXONE_*`/`JIRA_*` secrets as above, configured on that repo (Settings →
-Secrets and variables → Actions).
+`CXONE_*`/`JIRA_*` secrets and `JIRA_FIELD_*` env vars as above, configured
+on that repo (Settings → Secrets and variables → Actions).
 
 No `-i`/`-e` flag needed — the binary reads `$GITHUB_EVENT_PATH`, which the
 runner sets for every triggered event, including `repository_dispatch`.
 
-The Jira side that fires this — the Automation rule building the payload
-above (including the `subtasks` array) and sending it to
-`/repos/.../dispatches` — is documented in
+The Jira side that fires this — the Automation rule sending just the
+ticket key to `/repos/.../dispatches` — is documented in
 [`docs/jira-automation-setup.md`](docs/jira-automation-setup.md).
