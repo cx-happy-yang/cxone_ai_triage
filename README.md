@@ -198,6 +198,11 @@ pip install -r requirements.txt
 
 ## Authentication
 
+See [`docs/cxone-minimum-permissions.md`](docs/cxone-minimum-permissions.md)
+and [`docs/jira-minimum-permissions.md`](docs/jira-minimum-permissions.md)
+for what to actually grant the CxOne OAuth client and the Jira account
+behind these credentials — least-privilege, not "give it admin".
+
 Read by `CheckmarxPythonSDK` from environment variables. Recommended for
 CI (OAuth client / client-credentials grant):
 
