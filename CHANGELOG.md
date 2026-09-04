@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.6]
 
 ### Added
 - `client_payload.issue_key` is now a supported alternative to
