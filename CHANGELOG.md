@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0]
 
 ### Removed
 - **Breaking:** `client_payload.jira_issue` (the Jira Automation rule
