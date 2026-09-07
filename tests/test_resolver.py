@@ -16,7 +16,7 @@ from CheckmarxPythonSDK.CxOne.dto import (
 )
 
 from cxone_ai_triage.models import TriageJob
-from cxone_ai_triage.resolver import TriageResolver
+from cxone_ai_triage.resolver import RESULTS_PAGE_SIZE, TriageResolver
 
 SCAN_ID = "11111111-1111-1111-1111-111111111111"
 PROJECT_ID = "proj-abc"
@@ -182,6 +182,32 @@ class TestTriageResolver(unittest.TestCase):
         self.resolver.resolve_and_trigger_all(jobs)
         self.assertEqual(self.resolver.results_call_count, 1)
         self.assertEqual(self.resolver._project_id_by_scan[SCAN_ID], PROJECT_ID)
+
+    def test_pagination_does_not_trust_a_wrong_totalCount_and_fetches_every_page(self):
+        # A live tenant returned totalCount=RESULTS_PAGE_SIZE (matching just
+        # the first page) for a scan that actually had 6500 results -
+        # `offset >= totalCount` stopped the whole fetch after page 1.
+        # _get_all_results must page until a short page comes back instead,
+        # regardless of what totalCount claims.
+        row_count = RESULTS_PAGE_SIZE * 2 + 200  # 3 pages: full, full, partial
+        all_rows = [
+            Result(type="sast", id=f"r{i}", alternate_id=f"alt-{i}", similarity_id=str(i), data=None)
+            for i in range(row_count)
+        ]
+
+        def fake_get_all_results(scan_id, offset=0, limit=500, **kw):
+            self.resolver.results_call_count += 1
+            return {
+                "results": all_rows[offset:offset + limit],
+                "totalCount": RESULTS_PAGE_SIZE,  # deliberately wrong, matches the live bug
+            }
+
+        self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = fake_get_all_results
+
+        fetched = self.resolver._get_all_results(SCAN_ID)
+
+        self.assertEqual(len(fetched), row_count)
+        self.assertEqual(self.resolver.results_call_count, 3)
 
     def test_multiple_sast_jobs_on_same_scan_are_batched_into_one_trigger_call(self):
         # e.g. a ticket with VulnerabilityId1 and VulnerabilityId2 both populated.

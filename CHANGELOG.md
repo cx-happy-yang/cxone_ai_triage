@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `_get_all_results` (`GET /api/results` pagination) no longer trusts the
+  response's `totalCount` to decide when to stop paging. A live tenant
+  returned `totalCount` matching just the first page's size (500) for a
+  scan that actually had 6500 results — `offset >= totalCount` stopped the
+  whole fetch after page 1, silently dropping every row past the first
+  page and causing `_find_alternate_id` to report "no such similarityId"
+  for results that genuinely existed (confirmed present in the CxOne UI).
+  Pagination now stops on the first short page (fewer rows returned than
+  requested) instead, which doesn't depend on `totalCount`'s accuracy at
+  all.
+
 ## [0.3.2]
 
 ### Fixed
