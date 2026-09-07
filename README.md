@@ -189,18 +189,24 @@ is excluded from its batch rather than blocking the others. Polling and
 Jira commenting stay per-job either way (see below) — each result (and, for
 SCA, each subtask) still gets its own verdict and its own comment.
 
-**A SAST ticket's `VulnerabilityId` fields can fail resolution if two of
-them share one `similarityId`.** Checkmarx groups SAST findings by
-vulnerability *pattern* (e.g. the same SQL injection query pattern found
-at two different code locations), not by specific occurrence — a live
-tenant hit exactly this: 2 distinct `VulnerabilityId` values (2 different
-resultHashes) resolved to the same `similarityId`, and `/api/results` had
-no other field to tell those two rows apart (unlike SCA, which
-disambiguates via `package_identifier`/`assetName`). `_find_alternate_id`
-fails loudly for that specific `VulnerabilityId` rather than guessing
-which row is which — attributing an AI Triage verdict to the wrong
-specific finding would be worse than not triaging it — logging every
-field on the ambiguous rows to help find a real disambiguator later.
+**A SAST ticket's `VulnerabilityId` fields can share one `similarityId`.**
+Checkmarx groups SAST findings by vulnerability *pattern* (e.g. the same
+SQL injection query pattern found at two different code locations), not by
+specific occurrence — a live tenant hit exactly this: 2 distinct
+`VulnerabilityId` values (2 different resultHashes) resolved to the same
+`similarityId`, and `/api/results` had no other field to tell those two
+rows apart (unlike SCA, which disambiguates via
+`package_identifier`/`assetName`). Rather than failing, this is treated as
+a legitimate grouping: since `groupId` *is* the `similarityId` for SAST and
+AI Triage only ever returns one verdict per `groupId`, both
+`VulnerabilityId`s are, from CxOne's point of view, the exact same result.
+`_find_alternate_id` picks one matching `/api/results` row as the shared
+representative (logging every field on each ambiguous row for visibility),
+`_trigger_batch` de-duplicates so that representative's resultID is only
+submitted once, and both jobs' existing-triage pre-check and poll only
+happen once for the shared `groupId` (see below) — with one shared Jira
+comment naming every `VulnerabilityId` involved, rather than one comment
+per job.
 
 ### Polling the result and posting it back to Jira
 
@@ -231,6 +237,20 @@ posts it as a comment on **the parent ticket key** (`job.ticket_key`) via
 several results (multiple `VulnerabilityId`s, or multiple SCA subtasks),
 every one of their comments lands on that one parent ticket, not on a
 subtask.
+
+Jobs are polled and commented on individually **except** when 2+ of them
+resolve to the exact same `(project_id, group_id)` — the SAST
+`similarityId`-collision case above being the common source of this.
+`pipeline.run_pipeline` de-duplicates the poll targets it sends to
+`resolver.poll_ai_triage_results` (one GET per unique `group_id`, not one
+per job), and groups those jobs' comments together: when they have 2+
+distinct vulnerability labels (`VulnerabilityId`/CVE ID values), it posts
+one shared comment listing all of them (`*Vulnerability IDs:* hash-one,
+hash-two.` — see `comment_formatter.build_vulnerability_marker_multi`)
+instead of a comment each, since they share one AI Triage verdict anyway. A
+group whose members all have the *same* label (e.g. a literal duplicate
+input row) isn't treated as a "shared comment" group — it's left to the
+ordinary duplicate-marker check, unchanged.
 
 A failure at either step (timeout polling, or the Jira API call itself)
 is recorded on the output row (`poll_error` / `comment_error`) but never

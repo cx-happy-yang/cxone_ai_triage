@@ -38,12 +38,25 @@ def build_vulnerability_marker(vulnerability_label_name: str, vulnerability_labe
     return f"*{vulnerability_label_name}:* {vulnerability_label}."
 
 
+def build_vulnerability_marker_multi(vulnerability_label_name: str, vulnerability_labels: List[str]) -> str:
+    """Same idea as build_vulnerability_marker, but for 2+ vulnerability
+    labels that share one AI Triage verdict — e.g. two SAST VulnerabilityId
+    values whose findings collapsed onto the same similarityId (see
+    resolver._find_alternate_id). pipeline.run_pipeline posts one comment
+    for the whole group instead of one per job; this is the marker that
+    identifies it (so a re-run recognizes it already exists) and lists
+    every label it covers."""
+    plural_name = vulnerability_label_name if vulnerability_label_name.endswith("s") else vulnerability_label_name + "s"
+    return f"*{plural_name}:* {', '.join(vulnerability_labels)}."
+
+
 def format_comment(
     result: AiTriageResult,
     package_name_version: Optional[str] = None,
     vulnerability_label: Optional[str] = None,
     vulnerability_label_name: str = "Vulnerability ID",
     subtask_key: Optional[str] = None,
+    vulnerability_labels: Optional[List[str]] = None,
 ) -> str:
     """Build one paragraph (sentence per field group, joined with spaces).
 
@@ -60,10 +73,21 @@ def format_comment(
         subtask_key: SCA only — the originating subtask's key, if this job
             came from one, for cross-reference even though the comment
             itself is posted on the parent.
+        vulnerability_labels: 2+ labels that all share this one verdict
+            (e.g. two SAST VulnerabilityId values whose findings collapsed
+            onto the same similarityId — see
+            resolver._find_alternate_id and pipeline.run_pipeline). Takes
+            precedence over vulnerability_label when given.
     """
     parts: List[str] = []
 
-    if vulnerability_label:
+    if vulnerability_labels:
+        parts.append(build_vulnerability_marker_multi(vulnerability_label_name, vulnerability_labels))
+        parts.append(
+            "*Note:* these share one CxOne AI Triage verdict because Checkmarx "
+            "grouped them under the same finding."
+        )
+    elif vulnerability_label:
         parts.append(build_vulnerability_marker(vulnerability_label_name, vulnerability_label))
     if subtask_key:
         parts.append(f"*Subtask:* {subtask_key}.")

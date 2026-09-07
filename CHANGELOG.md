@@ -19,19 +19,25 @@
   batch method, so a still-pending job's checks were happening silently,
   reported live as "it never even tries to get the other 2 vulnerability
   id triage result" when they were in fact being checked every round.
-- `_find_alternate_id`'s ambiguous-match error is now scanner-type-aware.
-  A live tenant hit 2 SAST `VulnerabilityId` values (2 different
-  resultHashes) genuinely sharing one `similarityId` — Checkmarx groups by
-  vulnerability *pattern*, not by specific code location — with no
-  `package_identifier`-style disambiguator available for SAST (that's
-  SCA-only) and empty `data` on both matching `/api/results` rows. Rather
-  than reusing SCA's "set package_identifier" message (nonsensical for
-  SAST), it now logs every field on each ambiguous row (id, alternate_id,
-  data, description, vulnerability_details, first_found_at, found_at,
-  created) to surface whatever else might disambiguate them next time,
-  and raises a SAST-specific error instead. Still fails loudly rather than
-  silently guessing, since attributing an AI Triage verdict to the wrong
-  specific finding would be worse than not triaging it at all.
+- 2+ SAST `VulnerabilityId` values that resolve to the same `similarityId`
+  no longer fail the job. A live tenant hit exactly this: 2 distinct
+  resultHashes genuinely sharing one `similarityId`, because Checkmarx
+  groups SAST findings by vulnerability *pattern*, not by specific
+  occurrence (with no `package_identifier`-style disambiguator available
+  for SAST — that's SCA-only — and empty `data` on both matching
+  `/api/results` rows). Since `groupId` *is* the `similarityId` for SAST
+  and AI Triage only ever returns one verdict per `groupId`, this no
+  longer needs to be resolved precisely: `_find_alternate_id` picks one
+  matching row as the shared representative (logging every field on each
+  ambiguous row for visibility), `_trigger_batch` de-duplicates the
+  resultIDs it actually sends so the shared representative is only
+  submitted once, the existing-triage pre-check and
+  `poll_ai_triage_results` are only ever called once per shared `groupId`
+  instead of once per job, and `pipeline.run_pipeline` posts one Jira
+  comment naming every one of the distinct `VulnerabilityId` values
+  instead of one comment per job (see `comment_formatter.
+  build_vulnerability_marker_multi` / `format_comment`'s
+  `vulnerability_labels` parameter).
 
 ## [0.3.7]
 

@@ -127,13 +127,17 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.status, "failed")
         self.assertIn("share similarityId", outcome.error)
 
-    def test_sast_ambiguous_similarity_id_fails_and_logs_row_details(self):
+    def test_sast_ambiguous_similarity_id_picks_one_row_and_logs_details_instead_of_failing(self):
         # A live tenant showed 2 distinct VulnerabilityId values (2 different
         # resultHashes) genuinely sharing one similarityId - Checkmarx groups
         # by vulnerability *pattern*, not by specific code location. SAST has
-        # no package_identifier-style disambiguator, so this must fail
-        # loudly (not silently pick one) rather than attribute an AI Triage
-        # verdict to the wrong specific finding.
+        # no package_identifier-style disambiguator, but unlike SCA that's
+        # fine: groupId *is* the similarityId for SAST, and AI Triage only
+        # ever returns one verdict per groupId, so any one of the ambiguous
+        # rows' alternateId is an equally valid representative to submit -
+        # this no longer fails the job (see resolve_and_trigger_all's
+        # resultID de-duplication and pipeline.run_pipeline's comment
+        # grouping for how jobs sharing this groupId end up combined).
         dup_row_a = Result(type="sast", id="dup-a", alternate_id="alt-dup-a", similarity_id="999999999", data=None)
         dup_row_b = Result(type="sast", id="dup-b", alternate_id="alt-dup-b", similarity_id="999999999", data=None)
         self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = (
@@ -147,12 +151,11 @@ class TestTriageResolver(unittest.TestCase):
         )
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-9", result_hash="hash-ambiguous")
 
-        with self.assertLogs("cxone_ai_triage", level="ERROR") as cm:
+        with self.assertLogs("cxone_ai_triage", level="INFO") as cm:
             outcome = self.resolver.resolve_and_trigger(job)
 
-        self.assertEqual(outcome.status, "failed")
-        self.assertIn("2 sast rows", outcome.error)
-        self.assertIn("no way to disambiguate", outcome.error)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertEqual(outcome.alternate_id, "alt-dup-a")  # first match, deterministic
         self.assertTrue(any("alt-dup-a" in line for line in cm.output))
         self.assertTrue(any("alt-dup-b" in line for line in cm.output))
 
@@ -351,6 +354,45 @@ class TestTriageResolver(unittest.TestCase):
         # The batch only ever contained the one resolvable job.
         self.assertEqual(len(self.resolver.trigger_calls), 1)
         self.assertEqual(self.resolver.trigger_calls[0][1], [("sast", ["alt-sast-1"])])
+
+    def test_two_sast_jobs_sharing_a_similarity_id_are_deduped_into_one_trigger_resultid(self):
+        # Two distinct VulnerabilityId ticket fields (2 different
+        # resultHashes) can resolve to the same similarityId (see
+        # test_sast_ambiguous_similarity_id_picks_one_row_and_logs_details_instead_of_failing).
+        # Both end up with the same representative alternateId/groupId, so
+        # the trigger call should only submit that resultID once.
+        dup_row_a = Result(type="sast", id="dup-a", alternate_id="alt-dup-a", similarity_id="999999999", data=None)
+        dup_row_b = Result(type="sast", id="dup-b", alternate_id="alt-dup-b", similarity_id="999999999", data=None)
+        self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = (
+            lambda scan_id, offset=0, limit=500, **kw: {"results": [dup_row_a, dup_row_b], "totalCount": 2}
+        )
+        sast_results_by_hash = {
+            "hash-a": SastResult(result_hash="hash-a", similarity_id=999999999),
+            "hash-b": SastResult(result_hash="hash-b", similarity_id=999999999),
+        }
+        self.resolver._sast_results_api.get_sast_results_by_scan_id = (
+            lambda scan_id, result_id=None, limit=1, **kw: {
+                "results": [sast_results_by_hash[result_id[0]]], "totalCount": 1,
+            }
+        )
+        jobs = [
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-9", result_hash="hash-a"),
+            TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-9", result_hash="hash-b"),
+        ]
+
+        outcomes = self.resolver.resolve_and_trigger_all(jobs)
+
+        self.assertEqual([o.status for o in outcomes], ["accepted", "accepted"])
+        self.assertEqual(outcomes[0].alternate_id, "alt-dup-a")
+        self.assertEqual(outcomes[1].alternate_id, "alt-dup-a")  # same representative row
+        self.assertEqual(outcomes[0].group_id, outcomes[1].group_id)
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+        _, buckets = self.resolver.trigger_calls[0]
+        _, result_ids = buckets[0]
+        self.assertEqual(result_ids, ["alt-dup-a"])  # de-duplicated, not sent twice
+        self.assertEqual(outcomes[0].triage_id, outcomes[1].triage_id)
+        # The existing-triage pre-check is only made once for the shared groupId too.
+        self.assertEqual(len(self.resolver.existing_triage_check_calls), 1)
 
     def test_skips_trigger_when_a_finished_result_already_exists(self):
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")

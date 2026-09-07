@@ -196,6 +196,54 @@ class TestRunPipeline(unittest.TestCase):
         self.assertIn("*Vulnerability ID:* hash-one.", jira_client.comments[0][1])
         self.assertIn("*Vulnerability ID:* hash-two.", jira_client.comments[1][1])
 
+    def test_jobs_sharing_a_group_id_with_distinct_labels_get_one_combined_comment(self):
+        # e.g. two SAST VulnerabilityId fields whose findings collapsed onto
+        # the same similarityId (see resolver._find_alternate_id's SAST
+        # ambiguous-match handling) - both outcomes share one group_id, so
+        # they get exactly one shared comment naming both, and polling that
+        # shared group_id happens only once.
+        job1 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-one")
+        job2 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-two")
+        outcome1 = make_accepted_outcome(job1, group_id="group-shared")
+        outcome2 = make_accepted_outcome(job2, group_id="group-shared")
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome1}, poll_result=result)
+        resolver.resolve_and_trigger_all = lambda jobs: [outcome1, outcome2]
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job1, job2], resolver, jira_client)
+
+        self.assertEqual(len(jira_client.comments), 1)  # one shared comment, not two
+        issue_key, comment = jira_client.comments[0]
+        self.assertEqual(issue_key, "JVL-2")
+        self.assertIn("*Vulnerability IDs:* hash-one, hash-two.", comment)
+        self.assertTrue(outcomes[0].comment_posted)
+        self.assertTrue(outcomes[1].comment_posted)
+        # Only one GET for the shared group_id, not one per job.
+        self.assertEqual(resolver.poll_calls, [("proj-1", "group-shared")])
+
+    def test_a_shared_group_comment_is_skipped_as_a_duplicate_on_a_re_run(self):
+        job1 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-one")
+        job2 = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-two")
+        outcome1 = make_accepted_outcome(job1, group_id="group-shared")
+        outcome2 = make_accepted_outcome(job2, group_id="group-shared")
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(outcome_by_scan={"s1": outcome1}, poll_result=result)
+        resolver.resolve_and_trigger_all = lambda jobs: [outcome1, outcome2]
+        jira_client = FakeJiraClient(
+            existing_bodies_by_issue={
+                "JVL-2": ["*Vulnerability IDs:* hash-one, hash-two. *CxOne AI Triage verdict:* VULNERABLE."]
+            }
+        )
+
+        outcomes = run_pipeline([job1, job2], resolver, jira_client)
+
+        self.assertEqual(jira_client.comments, [])
+        self.assertFalse(outcomes[0].comment_posted)
+        self.assertFalse(outcomes[1].comment_posted)
+        self.assertIsNotNone(outcomes[0].comment_skipped_reason)
+        self.assertIsNotNone(outcomes[1].comment_skipped_reason)
+
     def test_posts_normally_when_existing_comment_check_fails(self):
         job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="hash-xyz")
         outcome = make_accepted_outcome(job)
