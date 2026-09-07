@@ -130,31 +130,40 @@ documented anywhere:
 
 Before batching a job for triggering, `resolver.resolve_and_trigger_all`
 first checks `GET /api/ai-triage/triage/{projectId}/{groupId}` (the same
-call `poll_ai_triage_result` uses). If that result already exists — whether
-still `IN_PROGRESS` from an earlier run or already finished — the trigger
-is skipped for that job entirely (`outcome.trigger_skipped_reason` is set,
-`triage_id` stays `None`) instead of re-submitting it. This matters most on
-re-runs/retries of the same ticket: nothing gets re-triggered, but polling
-and commenting still happen normally, since `poll_ai_triage_result` returns
-immediately when the status is already terminal. A failed check (e.g. a
-transient error) fails open — it triggers as usual rather than blocking the
-run. A job with no `groupId` yet (e.g. the SCA `/api/risks` lookup found
-nothing) skips the check and triggers as before.
+call `poll_ai_triage_result`/`poll_ai_triage_results` use). If that result
+already exists, the trigger is skipped for that job entirely
+(`outcome.trigger_skipped_reason` is set, `triage_id` stays `None`)
+instead of re-submitting it. This matters most on re-runs/retries of the
+same ticket: nothing gets re-triggered, but polling and commenting still
+happen normally, since polling returns immediately when the status is
+already terminal. A failed check (e.g. a transient error) fails open — it
+triggers as usual rather than blocking the run. A job with no `groupId`
+yet (e.g. the SCA `/api/risks` lookup found nothing) skips the check and
+triggers as before.
 
-**Any status other than a blank/`NOT_TRIAGED`/`FAILED` value (case/whitespace
-normalized) counts as "already exists"** — this is deliberately permissive
-rather than an allowlist of `AiTriageResult`'s documented `triageStatus`
-values (`NOT_TRIAGED`, `IN_PROGRESS`, `FAILED`, `VULNERABLE`,
-`PROPOSED_NOT_EXPLOITABLE`, `UNCERTAIN`, `RISK_ACCEPTED`). Live testing hit
-`CONFIRMED` (a SAST/SCA result *state* value, not in that enum) for a
-vulnerability that had genuinely already been AI-triaged. Result states
-have predefined values (`TO_VERIFY`, `NOT_EXPLOITABLE`,
+**Any status other than a blank/`NOT_TRIAGED`/`FAILED`/`IN_PROGRESS` value
+(case/whitespace normalized) counts as "already exists"** — this is
+deliberately permissive rather than an allowlist of `AiTriageResult`'s
+documented `triageStatus` values (`NOT_TRIAGED`, `IN_PROGRESS`, `FAILED`,
+`VULNERABLE`, `PROPOSED_NOT_EXPLOITABLE`, `UNCERTAIN`, `RISK_ACCEPTED`).
+Live testing hit `CONFIRMED` (a SAST/SCA result *state* value, not in that
+enum) for a vulnerability that had genuinely already been AI-triaged.
+Result states have predefined values (`TO_VERIFY`, `NOT_EXPLOITABLE`,
 `PROPOSED_NOT_EXPLOITABLE`, `CONFIRMED`, `URGENT`) plus whatever custom
 states a tenant defines — but AI Triage itself only ever assigns a
 predefined one, never a custom state, so this field's real universe of
 values is still bounded even though it's broader than the SDK's own
 docstring enum. A strict allowlist would have wrongly treated `CONFIRMED`
 as "not triaged yet" and re-triggered needlessly.
+
+`IN_PROGRESS` doesn't count as "already exists" either, for the same
+reason `FAILED` doesn't: a live tenant showed a multi-`resultID` batch
+trigger call where only 1 of 3 ended up with a real verdict, and the other
+2 stayed `IN_PROGRESS` indefinitely across multiple follow-up runs.
+`AiTriageResult` has no timestamp to tell "still actively processing"
+apart from "stuck forever", so treating a stuck `IN_PROGRESS` as existing
+would mean those 2 could never be retried — it's now safe to re-batch and
+re-trigger instead, the same as blank/`NOT_TRIAGED`/`FAILED`.
 
 `FAILED` is the one deliberate exception to "already exists": it means AI
 Triage itself never produced a verdict, so treating it the same as a real
@@ -179,6 +188,19 @@ failing fails every outcome in it; a job that fails identifier *resolution*
 is excluded from its batch rather than blocking the others. Polling and
 Jira commenting stay per-job either way (see below) — each result (and, for
 SCA, each subtask) still gets its own verdict and its own comment.
+
+**A SAST ticket's `VulnerabilityId` fields can fail resolution if two of
+them share one `similarityId`.** Checkmarx groups SAST findings by
+vulnerability *pattern* (e.g. the same SQL injection query pattern found
+at two different code locations), not by specific occurrence — a live
+tenant hit exactly this: 2 distinct `VulnerabilityId` values (2 different
+resultHashes) resolved to the same `similarityId`, and `/api/results` had
+no other field to tell those two rows apart (unlike SCA, which
+disambiguates via `package_identifier`/`assetName`). `_find_alternate_id`
+fails loudly for that specific `VulnerabilityId` rather than guessing
+which row is which — attributing an AI Triage verdict to the wrong
+specific finding would be worse than not triaging it — logging every
+field on the ambiguous rows to help find a real disambiguator later.
 
 ### Polling the result and posting it back to Jira
 

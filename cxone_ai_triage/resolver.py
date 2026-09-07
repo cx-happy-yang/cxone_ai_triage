@@ -213,17 +213,42 @@ class TriageResolver:
                 f"{same_type_count} of type {job.scanner_type!r} for this scan)"
             )
         if len(matches) > 1:
-            packages = sorted(
-                {
-                    (m.data or {}).get("packageIdentifier")
-                    for m in matches
-                    if isinstance(m.data, dict) and m.data.get("packageIdentifier")
-                }
-            )
+            if job.scanner_type == "sca":
+                packages = sorted(
+                    {
+                        (m.data or {}).get("packageIdentifier")
+                        for m in matches
+                        if isinstance(m.data, dict) and m.data.get("packageIdentifier")
+                    }
+                )
+                raise LookupError(
+                    f"{len(matches)} sca rows in scan {job.scan_id} share "
+                    f"similarityId {similarity_id!r} (packages: {packages}); set "
+                    "package_identifier on the input row to disambiguate"
+                )
+            # SAST has no equivalent disambiguator (package_identifier is
+            # SCA-only) - a live tenant showed 2 distinct VulnerabilityId
+            # values (2 different resultHashes) genuinely sharing one
+            # similarityId (Checkmarx groups by vulnerability *pattern*,
+            # not by specific code location), with each /api/results row's
+            # `data` empty (unlike SCA's packageIdentifier). Logging every
+            # field on each ambiguous row so the next occurrence shows
+            # whatever else might disambiguate them (id/alternate_id/
+            # description/vulnerability_details/first_found_at/...).
+            for m in matches:
+                logger.error(
+                    "%s: ambiguous sast row - id=%s alternate_id=%s data=%r "
+                    "description=%r vulnerability_details=%r first_found_at=%s "
+                    "found_at=%s created=%s",
+                    job.ticket_key or job.scan_id, m.id, m.alternate_id, m.data,
+                    m.description, m.vulnerability_details, m.first_found_at,
+                    m.found_at, m.created,
+                )
             raise LookupError(
-                f"{len(matches)} {job.scanner_type} rows in scan {job.scan_id} share "
-                f"similarityId {similarity_id!r} (packages: {packages}); set "
-                "package_identifier on the input row to disambiguate"
+                f"{len(matches)} sast rows in scan {job.scan_id} share "
+                f"similarityId {similarity_id!r} with no way to disambiguate them "
+                f"(result_hash on the ticket: {job.result_hash!r}); see the logged "
+                "row details above"
             )
 
         match = matches[0]
@@ -333,11 +358,22 @@ class TriageResolver:
         but-undocumented statuses as "not triaged yet" and re-trigger
         needlessly.
 
-        FAILED is excluded on purpose too: unlike a genuine verdict, it
-        means AI Triage itself never produced a result, so treating it as
-        "already exists" would permanently block a retry on every future
-        run. Letting it fall through here means the job gets re-batched and
-        re-triggered instead.
+        FAILED and IN_PROGRESS are excluded on purpose too. FAILED means AI
+        Triage itself never produced a result, so treating it as "already
+        exists" would permanently block a retry on every future run.
+        IN_PROGRESS was originally left in as "already exists" (assumed
+        merely transient - still actively being processed), but a live
+        tenant showed a multi-resultID batch trigger call where only 1 of
+        3 resultIDs ended up with a real verdict; the other 2 stayed
+        IN_PROGRESS indefinitely (confirmed: still IN_PROGRESS on a
+        follow-up run, with no timestamp on AiTriageResult to tell "still
+        actively processing" apart from "abandoned/stuck"). Treating a
+        stuck IN_PROGRESS as "already exists" meant those 2 could never be
+        retried on any future run, ever - so it's treated the same as
+        FAILED/blank/NOT_TRIAGED now: safe to re-batch and re-trigger.
+        Re-triggering something that's genuinely still in flight is a
+        low-cost redundant call, not a correctness problem, unlike
+        permanently stranding a result that never finished.
         """
         try:
             result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
@@ -348,7 +384,7 @@ class TriageResolver:
             )
             return None
         status = (result.triageStatus or "").strip().upper()
-        if status in ("", "NOT_TRIAGED", "FAILED"):
+        if status in ("", "NOT_TRIAGED", "FAILED", "IN_PROGRESS"):
             return None
         return result
 
@@ -504,6 +540,9 @@ class TriageResolver:
                     pending.discard(i)
                     continue
                 results[i] = result
+                logger.info(
+                    "project %s group %s: AI Triage status=%s", project_id, group_id, result.triageStatus,
+                )
                 if (result.triageStatus or "NOT_TRIAGED") not in _IN_PROGRESS_TRIAGE_STATUSES:
                     pending.discard(i)
 
