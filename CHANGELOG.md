@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.3]
 
 ### Fixed
 - `_get_all_results` (`GET /api/results` pagination) no longer trusts the
