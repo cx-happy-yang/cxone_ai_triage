@@ -80,9 +80,12 @@ class FakeSdkResolver(TriageResolver):
         return {"results": [result] if result else [], "totalCount": 1 if result else 0}
 
     def _fake_get_all_results(self, scan_id, offset=0, limit=500, **kw):
+        # offset is a PAGE NUMBER here, matching the real (undocumented)
+        # API behavior confirmed live - see _get_all_results's docstring.
         assert scan_id == SCAN_ID
         self.results_call_count += 1
-        return {"results": ALL_RESULTS[offset:offset + limit], "totalCount": len(ALL_RESULTS)}
+        start = offset * limit
+        return {"results": ALL_RESULTS[start:start + limit], "totalCount": len(ALL_RESULTS)}
 
     def _fake_get_risks(self, project_id, engine=None, risk_name=None, limit=200, **kw):
         assert project_id == PROJECT_ID
@@ -185,7 +188,7 @@ class TestTriageResolver(unittest.TestCase):
 
     def test_pagination_does_not_trust_a_wrong_totalCount_and_fetches_every_page(self):
         # A live tenant returned totalCount=RESULTS_PAGE_SIZE (matching just
-        # the first page) for a scan that actually had 6500 results -
+        # the first page) for a scan that actually had far more results -
         # `offset >= totalCount` stopped the whole fetch after page 1.
         # _get_all_results must page until a short page comes back instead,
         # regardless of what totalCount claims.
@@ -196,9 +199,12 @@ class TestTriageResolver(unittest.TestCase):
         ]
 
         def fake_get_all_results(scan_id, offset=0, limit=500, **kw):
+            # offset is a PAGE NUMBER here, matching the real (undocumented)
+            # API behavior confirmed live - see _get_all_results's docstring.
             self.resolver.results_call_count += 1
+            start = offset * limit
             return {
-                "results": all_rows[offset:offset + limit],
+                "results": all_rows[start:start + limit],
                 "totalCount": RESULTS_PAGE_SIZE,  # deliberately wrong, matches the live bug
             }
 
@@ -208,6 +214,44 @@ class TestTriageResolver(unittest.TestCase):
 
         self.assertEqual(len(fetched), row_count)
         self.assertEqual(self.resolver.results_call_count, 3)
+
+    def test_pagination_uses_offset_as_a_page_number_not_a_row_skip_count(self):
+        # The critical, confirmed-live behavior: GET /api/results' `offset`
+        # is a page number (0-indexed), not a row-skip count, despite the
+        # SDK's own docstring ("offset: Items to skip"). Advancing offset
+        # by the number of rows already fetched (the natural reading of
+        # "items to skip") - rather than by 1 (the next page number) - was
+        # exactly why an earlier version of this fix still failed: it
+        # requested offset=500 for page 2 (intending "skip 500 rows"),
+        # which the real API instead read as "give me page #500" and
+        # correctly-per-that-reading returned nothing.
+        row_count = RESULTS_PAGE_SIZE + 64
+        all_rows = [
+            Result(type="sast", id=f"r{i}", alternate_id=f"alt-{i}", similarity_id=str(i), data=None)
+            for i in range(row_count)
+        ]
+        requested_offsets = []
+
+        def fake_get_all_results(scan_id, offset=0, limit=500, **kw):
+            requested_offsets.append(offset)
+            # A row-skip interpretation of offset would slice all_rows[offset:...],
+            # which for offset=500 (following a first page of 500 rows) would
+            # wrongly return nothing here too - so assert on the exact
+            # offsets requested instead of just the final row count, to
+            # pin down *how* pagination advances, not just whether it
+            # eventually stops.
+            if offset == 0:
+                return {"results": all_rows[:limit], "totalCount": row_count}
+            if offset == 1:
+                return {"results": all_rows[limit:], "totalCount": row_count}
+            return {"results": [], "totalCount": row_count}
+
+        self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = fake_get_all_results
+
+        fetched = self.resolver._get_all_results(SCAN_ID)
+
+        self.assertEqual(requested_offsets, [0, 1])
+        self.assertEqual(len(fetched), row_count)
 
     def test_multiple_sast_jobs_on_same_scan_are_batched_into_one_trigger_call(self):
         # e.g. a ticket with VulnerabilityId1 and VulnerabilityId2 both populated.
