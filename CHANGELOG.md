@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `_check_existing_triage` no longer treats a stuck `IN_PROGRESS` status as
+  "already exists" either (same reasoning already applied to `FAILED`). A
+  live tenant showed a multi-resultID batch trigger call where only 1 of 3
+  resultIDs ended up with a real verdict; the other 2 stayed `IN_PROGRESS`
+  indefinitely across multiple follow-up runs (`AiTriageResult` has no
+  timestamp to tell "still actively processing" apart from "stuck
+  forever"). Treating a stuck `IN_PROGRESS` as existing meant those 2
+  could never be retried, ever — it's now treated the same as
+  blank/`NOT_TRIAGED`/`FAILED`, safe to re-batch and re-trigger.
+- `resolver.poll_ai_triage_results` (the batch method `pipeline.py`
+  actually calls) now logs each target's status check the same way the
+  singular `poll_ai_triage_result` already did (0.3.5) — that logging
+  never actually applied to production once `pipeline.py` switched to the
+  batch method, so a still-pending job's checks were happening silently,
+  reported live as "it never even tries to get the other 2 vulnerability
+  id triage result" when they were in fact being checked every round.
+- `_find_alternate_id`'s ambiguous-match error is now scanner-type-aware.
+  A live tenant hit 2 SAST `VulnerabilityId` values (2 different
+  resultHashes) genuinely sharing one `similarityId` — Checkmarx groups by
+  vulnerability *pattern*, not by specific code location — with no
+  `package_identifier`-style disambiguator available for SAST (that's
+  SCA-only) and empty `data` on both matching `/api/results` rows. Rather
+  than reusing SCA's "set package_identifier" message (nonsensical for
+  SAST), it now logs every field on each ambiguous row (id, alternate_id,
+  data, description, vulnerability_details, first_found_at, found_at,
+  created) to surface whatever else might disambiguate them next time,
+  and raises a SAST-specific error instead. Still fails loudly rather than
+  silently guessing, since attributing an AI Triage verdict to the wrong
+  specific finding would be worse than not triaging it at all.
+
 ## [0.3.7]
 
 ### Added

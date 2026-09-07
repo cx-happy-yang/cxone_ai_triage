@@ -127,6 +127,35 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.status, "failed")
         self.assertIn("share similarityId", outcome.error)
 
+    def test_sast_ambiguous_similarity_id_fails_and_logs_row_details(self):
+        # A live tenant showed 2 distinct VulnerabilityId values (2 different
+        # resultHashes) genuinely sharing one similarityId - Checkmarx groups
+        # by vulnerability *pattern*, not by specific code location. SAST has
+        # no package_identifier-style disambiguator, so this must fail
+        # loudly (not silently pick one) rather than attribute an AI Triage
+        # verdict to the wrong specific finding.
+        dup_row_a = Result(type="sast", id="dup-a", alternate_id="alt-dup-a", similarity_id="999999999", data=None)
+        dup_row_b = Result(type="sast", id="dup-b", alternate_id="alt-dup-b", similarity_id="999999999", data=None)
+        self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = (
+            lambda scan_id, offset=0, limit=500, **kw: {"results": [dup_row_a, dup_row_b], "totalCount": 2}
+        )
+        self.resolver._sast_results_api.get_sast_results_by_scan_id = (
+            lambda scan_id, result_id=None, limit=1, **kw: {
+                "results": [SastResult(result_hash="hash-ambiguous", similarity_id=999999999)],
+                "totalCount": 1,
+            }
+        )
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-9", result_hash="hash-ambiguous")
+
+        with self.assertLogs("cxone_ai_triage", level="ERROR") as cm:
+            outcome = self.resolver.resolve_and_trigger(job)
+
+        self.assertEqual(outcome.status, "failed")
+        self.assertIn("2 sast rows", outcome.error)
+        self.assertIn("no way to disambiguate", outcome.error)
+        self.assertTrue(any("alt-dup-a" in line for line in cm.output))
+        self.assertTrue(any("alt-dup-b" in line for line in cm.output))
+
     def test_sca_job_disambiguated_by_package_identifier_succeeds(self):
         job = TriageJob(
             scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-3",
@@ -336,15 +365,23 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(self.resolver.trigger_calls, [])  # no POST was made
         self.assertEqual(self.resolver.existing_triage_check_calls, [(PROJECT_ID, "123456")])
 
-    def test_skips_trigger_when_a_result_is_already_in_progress(self):
+    def test_a_stuck_in_progress_status_does_not_block_a_retry(self):
+        # A live tenant showed a multi-resultID batch trigger where only 1
+        # of 3 resultIDs ended up with a real verdict - the other 2 stayed
+        # IN_PROGRESS indefinitely, confirmed still IN_PROGRESS on a
+        # follow-up run. There's no timestamp on AiTriageResult to tell
+        # "still actively processing" apart from "stuck forever", so
+        # IN_PROGRESS must not block a retry the way FAILED doesn't -
+        # otherwise a result stuck like this can never be retried, ever.
         job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
         self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="IN_PROGRESS")
 
         outcome = self.resolver.resolve_and_trigger(job)
 
+        self.assertIsNone(outcome.trigger_skipped_reason)
         self.assertEqual(outcome.status, "accepted", outcome.error)
-        self.assertIsNone(outcome.triage_id)
-        self.assertEqual(self.resolver.trigger_calls, [])
+        self.assertEqual(outcome.triage_id, "triage-1")
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
 
     def test_skips_trigger_for_an_undocumented_status_value(self):
         # A live tenant returned "CONFIRMED" (a SAST result *state*, not one
@@ -537,6 +574,20 @@ class TestPollAiTriageResults(unittest.TestCase):
 
     def setUp(self):
         self.resolver = FakeSdkResolver()
+
+    def test_logs_each_targets_status_check_so_a_long_wait_is_not_silent(self):
+        # pipeline.py calls this batch method, not the singular
+        # poll_ai_triage_result - a live report of "it never even tries to
+        # get the other 2 vulnerability id triage result" turned out to be
+        # this method silently checking them every round with zero log
+        # output, not an actual skip.
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus="VULNERABLE")
+        )
+        with self.assertLogs("cxone_ai_triage", level="INFO") as cm:
+            self.resolver.poll_ai_triage_results([(PROJECT_ID, "group-1"), (PROJECT_ID, "group-2")])
+        self.assertTrue(any("group-1" in line and "VULNERABLE" in line for line in cm.output))
+        self.assertTrue(any("group-2" in line and "VULNERABLE" in line for line in cm.output))
 
     def test_all_targets_already_terminal_in_one_round(self):
         responses = {
