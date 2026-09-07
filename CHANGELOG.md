@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.7]
 
 ### Added
 - `_trigger_batch` now logs the exact `POST /api/ai-triage/triage` payload
