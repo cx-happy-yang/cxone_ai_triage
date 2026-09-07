@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.5]
 
 ### Fixed
 - `poll_ai_triage_result` now logs every status check (`INFO`), not just
