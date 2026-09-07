@@ -520,6 +520,94 @@ class TestPollAiTriageResult(unittest.TestCase):
                 )
 
 
+class TestPollAiTriageResults(unittest.TestCase):
+    """poll_ai_triage_results - the batch method pipeline.py actually calls,
+    so a ticket's several findings are polled together instead of one
+    fully-waited-out job at a time (see resolver.py's docstring)."""
+
+    def setUp(self):
+        self.resolver = FakeSdkResolver()
+
+    def test_all_targets_already_terminal_in_one_round(self):
+        responses = {
+            "group-1": AiTriageResult(triageStatus="VULNERABLE"),
+            "group-2": AiTriageResult(triageStatus="PROPOSED_NOT_EXPLOITABLE"),
+        }
+        calls = []
+
+        def fake_retrieve(project_id, group_id):
+            calls.append((project_id, group_id))
+            return responses[group_id]
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        results = self.resolver.poll_ai_triage_results(
+            [(PROJECT_ID, "group-1"), (PROJECT_ID, "group-2")],
+            timeout_seconds=60, interval_seconds=1,
+        )
+        self.assertEqual([r.triageStatus for r in results], ["VULNERABLE", "PROPOSED_NOT_EXPLOITABLE"])
+        self.assertEqual(len(calls), 2)  # one GET per target, no re-polling once resolved
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_stops_querying_a_target_once_it_resolves_while_others_are_still_pending(self, mock_sleep):
+        # group-1 finishes on the very first round; group-2 needs a second.
+        # group-1 must not be queried again in round 2 - that's the whole
+        # point of batching: stop as soon as *that* target has its answer,
+        # instead of fully waiting out group-1's own poll loop before even
+        # starting group-2's (the old one-job-at-a-time behavior).
+        group_1_calls = 0
+        group_2_responses = iter([
+            AiTriageResult(triageStatus="IN_PROGRESS"),
+            AiTriageResult(triageStatus="VULNERABLE"),
+        ])
+
+        def fake_retrieve(project_id, group_id):
+            nonlocal group_1_calls
+            if group_id == "group-1":
+                group_1_calls += 1
+                return AiTriageResult(triageStatus="VULNERABLE")
+            return next(group_2_responses)
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        results = self.resolver.poll_ai_triage_results(
+            [(PROJECT_ID, "group-1"), (PROJECT_ID, "group-2")],
+            timeout_seconds=60, interval_seconds=1,
+        )
+        self.assertEqual(results[0].triageStatus, "VULNERABLE")
+        self.assertEqual(results[1].triageStatus, "VULNERABLE")
+        self.assertEqual(group_1_calls, 1)  # not re-queried once resolved
+        self.assertEqual(mock_sleep.call_count, 1)  # one round of waiting, not one per job
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_per_target_timeout_leaves_other_results_intact(self, mock_sleep):
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-1":
+                return AiTriageResult(triageStatus="VULNERABLE")
+            return AiTriageResult(triageStatus="IN_PROGRESS")
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            results = self.resolver.poll_ai_triage_results(
+                [(PROJECT_ID, "group-1"), (PROJECT_ID, "group-2")],
+                timeout_seconds=2, interval_seconds=1,
+            )
+        self.assertEqual(results[0].triageStatus, "VULNERABLE")
+        self.assertIsInstance(results[1], TimeoutError)
+
+    def test_a_retrieve_exception_for_one_target_does_not_block_the_others(self):
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-bad":
+                raise RuntimeError("503 Service Unavailable")
+            return AiTriageResult(triageStatus="VULNERABLE")
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        results = self.resolver.poll_ai_triage_results(
+            [(PROJECT_ID, "group-bad"), (PROJECT_ID, "group-1")],
+            timeout_seconds=60, interval_seconds=1,
+        )
+        self.assertIsInstance(results[0], RuntimeError)
+        self.assertEqual(results[1].triageStatus, "VULNERABLE")
+
+
 class _FakeConfiguration:
     server_base_url = "https://fake.ast.checkmarx.net"
 

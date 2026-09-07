@@ -1,15 +1,22 @@
 """Orchestrates the whole run: resolve identifiers + trigger AI Triage for
 every job (TriageResolver — batching jobs that share a scan_id/scanner_type
-into one trigger request each) -> poll each result -> post it as a Jira
-comment (JiraCommentClient). Kept separate from TriageResolver so the
-CxOne-only resolution logic stays testable without any Jira dependency.
+into one trigger request each) -> poll every result together -> post each
+one as a Jira comment (JiraCommentClient). Kept separate from TriageResolver
+so the CxOne-only resolution logic stays testable without any Jira
+dependency.
 
-Polling stays per-job even when triggering was batched, since each result
-has its own distinct groupId to poll. Commenting also stays per-job, but
-always targets the parent ticket key (job.ticket_key) — never a subtask,
-even for SCA jobs resolved from one — so a ticket with several results
-(multiple VulnerabilityIds, or multiple SCA subtasks) gets one comment per
-result, all on that one parent ticket.
+Every job needing a poll (project_id + group_id resolved, trigger not
+failed) is polled together via resolver.poll_ai_triage_results, not one at
+a time - AI Triage can finish every result in a batch trigger call around
+the same time server-side, so waiting on them sequentially (one job's full
+poll_ai_triage_result loop to completion before even starting the next)
+can take up to N x as long as necessary for no reason. Polling still stops
+as soon as *this* pending set is empty - once every job's result has come
+back, there's nothing left to wait on. Commenting always targets the
+parent ticket key (job.ticket_key) — never a subtask, even for SCA jobs
+resolved from one — so a ticket with several results (multiple
+VulnerabilityIds, or multiple SCA subtasks) gets one comment per result,
+all on that one parent ticket.
 
 Before posting, existing comments on that ticket are checked for the same
 "*Vulnerability ID:*"/"*CVE ID:*" marker format_comment always leads with
@@ -48,25 +55,32 @@ def run_pipeline(
     """
     outcomes = resolver.resolve_and_trigger_all(jobs)
 
+    # Poll every job that needs it together (one round of GETs across all
+    # of them, not each job's own full poll loop run to completion before
+    # the next even starts) - see the module docstring.
+    pollable = []
     for job, outcome in zip(jobs, outcomes):
-        if outcome.status == "failed" or not poll:
+        if outcome.status == "failed":
             continue
-
         if not outcome.project_id or not outcome.group_id:
             logger.warning(
                 "%s: missing project_id/group_id; skipping AI Triage result polling",
                 job.ticket_key or job.scan_id,
             )
             continue
+        pollable.append((job, outcome))
 
-        try:
-            result = resolver.poll_ai_triage_result(
-                outcome.project_id, outcome.group_id,
-                timeout_seconds=poll_timeout, interval_seconds=poll_interval,
-            )
-        except Exception as e:  # noqa: BLE001 - best-effort, don't abort the batch
-            outcome.poll_error = str(e)
-            logger.error("%s: polling AI Triage result failed: %s", job.ticket_key, e)
+    poll_results = []
+    if poll and pollable:
+        poll_results = resolver.poll_ai_triage_results(
+            [(o.project_id, o.group_id) for _, o in pollable],
+            timeout_seconds=poll_timeout, interval_seconds=poll_interval,
+        )
+
+    for (job, outcome), result in zip(pollable, poll_results):
+        if isinstance(result, Exception):
+            outcome.poll_error = str(result)
+            logger.error("%s: polling AI Triage result failed: %s", job.ticket_key, result)
             continue
 
         outcome.ai_triage_status = result.triageStatus

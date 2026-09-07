@@ -9,8 +9,9 @@ from cxone_ai_triage.pipeline import run_pipeline
 class FakeResolver:
     """Stands in for TriageResolver: resolve_and_trigger_all returns a
     preconfigured outcome per scan_id (batching is TriageResolver's own
-    concern, exercised separately in test_resolver.py), poll_ai_triage_result
-    returns a preconfigured AiTriageResult or raises, per test."""
+    concern, exercised separately in test_resolver.py); poll_ai_triage_results
+    (the batch method pipeline.py actually calls) returns the same
+    preconfigured AiTriageResult or Exception for every target requested."""
 
     def __init__(self, outcome_by_scan=None, poll_result=None, poll_error=None):
         self.outcome_by_scan = outcome_by_scan or {}
@@ -21,11 +22,12 @@ class FakeResolver:
     def resolve_and_trigger_all(self, jobs) -> list:
         return [self.outcome_by_scan[job.scan_id] for job in jobs]
 
-    def poll_ai_triage_result(self, project_id, group_id, timeout_seconds=600, interval_seconds=15):
-        self.poll_calls.append((project_id, group_id))
-        if self.poll_error:
-            raise self.poll_error
-        return self.poll_result
+    def poll_ai_triage_results(self, targets, timeout_seconds=600, interval_seconds=15):
+        results = []
+        for project_id, group_id in targets:
+            self.poll_calls.append((project_id, group_id))
+            results.append(self.poll_error if self.poll_error else self.poll_result)
+        return results
 
 
 class FakeJiraClient:

@@ -184,10 +184,19 @@ SCA, each subtask) still gets its own verdict and its own comment.
 
 `POST /api/ai-triage/triage` is async (`202 Accepted`, no verdict yet), so
 after triggering, `cxone_ai_triage/pipeline.py` polls
-`GET /api/ai-triage/triage/{projectId}/{groupId}` (`resolver.poll_ai_triage_result`)
-until `triageStatus` leaves `NOT_TRIAGED`/`IN_PROGRESS` (or times out —
-`--poll-timeout`, default 600s), then renders every field on the response
-(`AiTriageResult`: verdict, reachability + reasoning, exploitability +
+`GET /api/ai-triage/triage/{projectId}/{groupId}` for every job needing it
+**together** (`resolver.poll_ai_triage_results` — one round of GETs across
+all of them per `--poll-interval`, not each job's own full poll loop run to
+completion before the next even starts) until each one's `triageStatus`
+leaves `NOT_TRIAGED`/`IN_PROGRESS` (or times out — `--poll-timeout`, default
+600s, counted from the same start for every job in the batch, not restarted
+per remaining one). A job drops out of that polling as soon as its own
+result is ready, so a ticket with several results (multiple
+`VulnerabilityId`s, multiple SCA subtasks) finishes as fast as the slowest
+one, not the sum of all of them — AI Triage can finish every result in a
+batch trigger call around the same time server-side, so waiting on them one
+at a time wasted time for no reason. Once a result's ready, every field on
+the response gets rendered (`AiTriageResult`: verdict, reachability + reasoning, exploitability +
 reasoning, attackability, confidence score + explanation, usage locations,
 SCA component/version, verification steps, repository info, scanner/result/
 triagedAt) — plus, for SCA, the package name/version from the ticket-level
