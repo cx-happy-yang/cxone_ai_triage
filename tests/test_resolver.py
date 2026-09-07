@@ -485,6 +485,16 @@ class TestPollAiTriageResult(unittest.TestCase):
         result = self.resolver.poll_ai_triage_result(PROJECT_ID, "group-1")
         self.assertIs(result, terminal)
 
+    def test_logs_each_status_check_so_a_long_wait_is_not_silent(self):
+        # A bounded-but-long wait (default timeout 600s) with zero log
+        # output in between looks indistinguishable from a hang in a live
+        # GitHub Actions log - every check must be visible.
+        terminal = AiTriageResult(triageStatus="VULNERABLE")
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = lambda p, g: terminal
+        with self.assertLogs("cxone_ai_triage", level="INFO") as cm:
+            self.resolver.poll_ai_triage_result(PROJECT_ID, "group-1")
+        self.assertTrue(any("VULNERABLE" in line for line in cm.output))
+
     @patch("cxone_ai_triage.resolver.time.sleep")
     def test_polls_until_status_leaves_in_progress(self, mock_sleep):
         responses = iter([
