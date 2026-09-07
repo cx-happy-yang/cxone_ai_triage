@@ -189,11 +189,15 @@ class TestParseJiraIssue(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_jira_issue({"key": "X-1", "description": description})
 
-    def test_load_issue_key_from_sample_event_file(self):
-        issue_key = load_issue_key("samples/github_event_issue_key.sample.json")
+    def test_load_issue_key_from_repository_dispatch_sample_event_file(self):
+        issue_key = load_issue_key("samples/github_event_repository_dispatch.sample.json")
         self.assertEqual(issue_key, "JVL-2")
 
-    def test_load_issue_key_returns_the_key(self):
+    def test_load_issue_key_from_workflow_dispatch_sample_event_file(self):
+        issue_key = load_issue_key("samples/github_event_workflow_dispatch.sample.json")
+        self.assertEqual(issue_key, "JVL-2")
+
+    def test_load_issue_key_returns_the_key_from_repository_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             event_path = Path(tmp) / "event.json"
             event_path.write_text(json.dumps(
@@ -202,10 +206,22 @@ class TestParseJiraIssue(unittest.TestCase):
             issue_key = load_issue_key(str(event_path))
         self.assertEqual(issue_key, "JVL-20")
 
+    def test_load_issue_key_returns_the_key_from_workflow_dispatch(self):
+        # Some orgs disable repository_dispatch entirely; workflow_dispatch
+        # carries the key at inputs.issue_key instead of
+        # client_payload.issue_key.
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = Path(tmp) / "event.json"
+            event_path.write_text(json.dumps(
+                {"inputs": {"issue_key": "JVL-21"}}
+            ))
+            issue_key = load_issue_key(str(event_path))
+        self.assertEqual(issue_key, "JVL-21")
+
     def test_load_issue_key_raises_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             event_path = Path(tmp) / "event.json"
-            event_path.write_text(json.dumps({"client_payload": {}}))
+            event_path.write_text(json.dumps({"client_payload": {}, "inputs": {}}))
             with self.assertRaises(ValueError):
                 load_issue_key(str(event_path))
 

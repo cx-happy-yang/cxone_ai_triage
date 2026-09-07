@@ -8,16 +8,19 @@ the [`jira`](https://pypi.org/project/jira/) package.
 
 ## Why this exists
 
-Prudential dispatches this tool as a GitHub Actions `repository_dispatch`
-event carrying just the ticket key: `client_payload.issue_key` (e.g.
-`"JVL-20"`). This tool fetches the full ticket (and its subtasks) itself
-via the Jira REST API (`JiraCommentClient.get_issue_for_triage`), using
-`JIRA_FIELD_*` env vars to know which custom field is which (see
-"Authentication" below) — so the Jira Automation rule that dispatches this
-event (documented in
-[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md)) never has
-to maintain a field-by-field mapping, or be touched again when a new
-custom field is needed.
+Prudential dispatches this tool as a GitHub Actions event carrying just the
+ticket key — either `workflow_dispatch`'s `inputs.issue_key`, or
+`repository_dispatch`'s `client_payload.issue_key`, whichever an org's
+policy allows (`github_event.py` reads either shape automatically; some
+orgs' policies disable `repository_dispatch` entirely, which is why
+`workflow_dispatch` is the primary path documented in
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md)). This
+tool fetches the full ticket (and its subtasks) itself via the Jira REST
+API (`JiraCommentClient.get_issue_for_triage`), using `JIRA_FIELD_*` env
+vars to know which custom field is which (see "Authentication" below) — so
+the Jira Automation rule that dispatches this event never has to maintain
+a field-by-field mapping, or be touched again when a new custom field is
+needed.
 
 The identifiers `cxone_ai_triage/jira_parser.py` needs then come from two
 places in the resulting structured object, checked in this order:
@@ -267,11 +270,12 @@ look them up on a given site.
 
 ## Usage
 
-Production mode — no arguments needed. Reads `client_payload.issue_key`
-from the GitHub Actions `repository_dispatch` event at `$GITHUB_EVENT_PATH`
-(every job gets this env var automatically), then fetches the ticket
-itself — needs `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` (and usually
-`JIRA_FIELD_*`) set first:
+Production mode — no arguments needed. Reads the issue key from the GitHub
+Actions event at `$GITHUB_EVENT_PATH` (every job gets this env var
+automatically) — either `inputs.issue_key` (`workflow_dispatch`) or
+`client_payload.issue_key` (`repository_dispatch`) — then fetches the
+ticket itself. Needs `JIRA_SERVER`/`JIRA_EMAIL`/`JIRA_API_TOKEN` (and
+usually `JIRA_FIELD_*`) set first:
 
 ```bash
 python main.py -o triage_results.json
@@ -281,7 +285,9 @@ Or point at an event file explicitly (e.g. to replay a real dispatch payload
 locally):
 
 ```bash
-python main.py -e samples/github_event_issue_key.sample.json -o triage_results.json
+python main.py -e samples/github_event_workflow_dispatch.sample.json -o triage_results.json
+# or, if your org's policy allows repository_dispatch instead:
+python main.py -e samples/github_event_repository_dispatch.sample.json -o triage_results.json
 ```
 
 Local/manual testing mode — a batch JSON/CSV of already-structured rows,
@@ -301,7 +307,8 @@ python main.py -i samples/input.sample.json -o triage_results.json
 | `package_identifier` | SCA only, optional | disambiguates when the same CVE hits more than one package in the scan |
 
 See `samples/input.sample.json` / `samples/input.sample.csv` /
-`samples/github_event_issue_key.sample.json`.
+`samples/github_event_workflow_dispatch.sample.json` /
+`samples/github_event_repository_dispatch.sample.json`.
 
 Output is a JSON/CSV report with the resolved `project_id`, `similarity_id`,
 `alternate_id`, `group_id`, the `triage_id` returned by the trigger call (or
@@ -362,8 +369,11 @@ uploading `triage_results.json` as a workflow artifact. Needs the same
 on that repo (Settings → Secrets and variables → Actions).
 
 No `-i`/`-e` flag needed — the binary reads `$GITHUB_EVENT_PATH`, which the
-runner sets for every triggered event, including `repository_dispatch`.
+runner sets for every triggered event, including `workflow_dispatch` and
+`repository_dispatch`.
 
 The Jira side that fires this — the Automation rule sending just the
-ticket key to `/repos/.../dispatches` — is documented in
-[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md).
+ticket key — is documented in
+[`docs/jira-automation-setup.md`](docs/jira-automation-setup.md) (Prudential
+uses `workflow_dispatch`, since their org's policy disables
+`repository_dispatch`).
