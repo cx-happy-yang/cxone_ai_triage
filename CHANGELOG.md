@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.2]
 
 ### Fixed
 - `parse_jira_issue` no longer requires a `'Checkmarx (SAST)'`/`'Checkmarx
