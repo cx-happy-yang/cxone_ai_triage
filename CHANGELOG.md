@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `parse_jira_issue` no longer requires a `'Checkmarx (SAST)'`/`'Checkmarx
+  (SCA)'` marker in the ticket description to determine scanner type when
+  structured fields already say which one it is. A live ticket
+  (RITSDEVSECOPS-43549) had `VulnerabilityId1` populated but no such marker
+  anywhere in its description — its template doesn't include Checkmarx's
+  usual description boilerplate at all — which failed before this fix,
+  since the marker check ran unconditionally before any structured field
+  was even looked at. `_infer_scanner_type` now checks `VulnerabilityId1..5`
+  (→ SAST) and `packageNameVersion`/`subtasks` (→ SCA) first, falling back
+  to the description marker only when neither structured signal is present.
+
 ## [0.3.1]
 
 ### Added

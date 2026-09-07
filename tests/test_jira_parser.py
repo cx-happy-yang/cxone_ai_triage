@@ -184,6 +184,63 @@ class TestParseJiraIssue(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_jira_issue({"key": "X-1", "description": "no scanner marker here"})
 
+    def test_infers_sast_from_vulnerability_id_with_no_description_marker(self):
+        # A live ticket (RITSDEVSECOPS-43549) had VulnerabilityId1 set but no
+        # "Checkmarx (SAST)" marker anywhere in its description - its
+        # template doesn't include Checkmarx's usual description boilerplate
+        # at all. Scanner type must still be inferred from the structured
+        # field alone.
+        jobs = parse_jira_issue(
+            {
+                "key": "RITSDEVSECOPS-43549",
+                "description": "no scanner marker here",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "VulnerabilityId1": "hash-one",
+            }
+        )
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].scanner_type, "sast")
+        self.assertEqual(jobs[0].result_hash, "hash-one")
+
+    def test_infers_sca_from_package_name_version_with_no_description_marker(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": "no scanner marker here",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "packageNameVersion": "log4j-core 2.14.1",
+                "subtasks": [{"key": "JVL-11", "summary": "SCA | CVE-2025-71329"}],
+            }
+        )
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].scanner_type, "sca")
+        self.assertEqual(jobs[0].cve_id, "CVE-2025-71329")
+
+    def test_infers_sca_from_subtasks_alone_with_no_description_marker(self):
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-10",
+                "description": "no scanner marker here",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "subtasks": [{"key": "JVL-11", "summary": "SCA | CVE-2025-71329"}],
+            }
+        )
+        self.assertEqual(jobs[0].scanner_type, "sca")
+
+    def test_vulnerability_id_wins_over_package_name_version_if_both_are_set(self):
+        # Shouldn't normally happen given the ticket template, but if it
+        # does, prefer SAST - matches _infer_scanner_type's documented order.
+        jobs = parse_jira_issue(
+            {
+                "key": "JVL-2",
+                "description": "no scanner marker here",
+                "scanId": "22222222-2222-2222-2222-222222222222",
+                "VulnerabilityId1": "hash-one",
+                "packageNameVersion": "log4j-core 2.14.1",
+            }
+        )
+        self.assertEqual(jobs[0].scanner_type, "sast")
+
     def test_missing_scan_id_raises(self):
         description = r"*Checkmarx \(SAST\):* Foo" "\nno scan id link here"
         with self.assertRaises(ValueError):
