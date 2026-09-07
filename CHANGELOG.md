@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.4]
 
 ### Fixed
 - `_get_all_results` (`GET /api/results` pagination, hardened in 0.3.3)
