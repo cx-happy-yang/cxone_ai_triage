@@ -26,6 +26,14 @@
 # JIRA_EMAIL, JIRA_API_TOKEN. See ../README.md "Authentication" and
 # ../docs/cxone-minimum-permissions.md / ../docs/jira-minimum-permissions.md
 # for what to actually grant these credentials.
+#
+# --poll-timeout 180: after triggering, cxone-ai-triage already polls
+# GET /api/ai-triage/triage/{projectId}/{groupId} for the finished verdict
+# before posting the Jira comment (see README's "Polling the result..."
+# section) - this just bounds that wait to 3 minutes instead of the
+# library default (10 minutes). Applies per result, polled one at a time -
+# a ticket with several VulnerabilityIds/CVEs waits up to this long for
+# each, not once for the whole run.
 
 name: CxOne AI Triage
 
@@ -73,7 +81,7 @@ jobs:
           JIRA_FIELD_VULNERABILITY_ID_4: customfield_10212
           JIRA_FIELD_VULNERABILITY_ID_5: customfield_10213
           JIRA_FIELD_PACKAGE_NAME_VERSION: customfield_10209
-        run: ./cxone-ai-triage -o triage_results.json -v
+        run: ./cxone-ai-triage -o triage_results.json --poll-timeout 180 -v
 
       - name: Upload triage results
         if: always()
