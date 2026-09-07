@@ -121,11 +121,17 @@ class TriageResolver:
                 page = self._scanner_results_api.get_all_scanners_results_by_scan_id(
                     scan_id=scan_id, offset=offset, limit=RESULTS_PAGE_SIZE
                 )
-                all_results.extend(page["results"])
-                total = page["totalCount"] or 0
-                offset += RESULTS_PAGE_SIZE
-                if offset >= total:
+                page_results = page["results"]
+                all_results.extend(page_results)
+                # Deliberately not trusting page["totalCount"] as the grand
+                # total to decide when to stop - a live tenant returned a
+                # totalCount matching just the first page's size (500) for a
+                # scan that actually had 6500 results, so `offset >= total`
+                # stopped the whole fetch after page 1. A short page (fewer
+                # rows than requested) is what actually means "last page".
+                if len(page_results) < RESULTS_PAGE_SIZE:
                     break
+                offset += len(page_results)
             self._results_by_scan[scan_id] = all_results
             logger.info(
                 "scan %s: fetched %d rows from /api/results", scan_id, len(all_results)

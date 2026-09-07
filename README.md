@@ -109,7 +109,12 @@ triaged CVE.
 
 `GET /api/results` has no `similarityId` filter, so every row for a scan is
 paged through (500 at a time) and cached per scan — unavoidable, but paid
-once per scan even across many ticket rows in the same batch.
+once per scan even across many ticket rows in the same batch. Pagination
+stops on the first short page (fewer rows returned than requested), not by
+comparing against the response's `totalCount` — a live tenant returned a
+`totalCount` matching just the first page's size for a scan that actually
+had 6500 results, which silently truncated the fetch after page 1 when the
+loop trusted it.
 
 ### Checking for an existing result before triggering
 
