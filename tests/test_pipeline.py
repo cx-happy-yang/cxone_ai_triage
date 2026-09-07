@@ -22,7 +22,7 @@ class FakeResolver:
     def resolve_and_trigger_all(self, jobs) -> list:
         return [self.outcome_by_scan[job.scan_id] for job in jobs]
 
-    def poll_ai_triage_results(self, targets, timeout_seconds=600, interval_seconds=15):
+    def poll_ai_triage_results(self, targets, timeout_seconds=180, interval_seconds=15):
         results = []
         for project_id, group_id in targets:
             self.poll_calls.append((project_id, group_id))

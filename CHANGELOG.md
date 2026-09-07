@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `DEFAULT_POLL_TIMEOUT_SECONDS` (the `--poll-timeout` default) lowered
+  from 600s to 180s, so the 3-minute bound applies out of the box without
+  needing to pass `--poll-timeout 180` explicitly — Prudential's actual
+  deployed workflow file doesn't automatically pick up changes to
+  `examples/prudential-cxone-ai-triage.yaml` in this repo, so a library
+  default was the only way to get this without requiring a separate
+  workflow-file update on their side.
+  `examples/prudential-cxone-ai-triage.yaml` keeps passing `--poll-timeout
+  180` explicitly anyway (now redundant with the default) so its behavior
+  doesn't silently change if the default is ever tuned differently again.
+  `--poll-timeout`'s help text also now clarifies it's shared across every
+  pending job in a run (see 0.3.5's batch polling), not restarted per job.
+
 ## [0.3.5]
 
 ### Fixed

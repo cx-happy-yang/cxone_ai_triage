@@ -30,10 +30,13 @@
 # --poll-timeout 180: after triggering, cxone-ai-triage already polls
 # GET /api/ai-triage/triage/{projectId}/{groupId} for the finished verdict
 # before posting the Jira comment (see README's "Polling the result..."
-# section) - this just bounds that wait to 3 minutes instead of the
-# library default (10 minutes). Applies per result, polled one at a time -
-# a ticket with several VulnerabilityIds/CVEs waits up to this long for
-# each, not once for the whole run.
+# section), for up to this many seconds before giving up. 180 is also the
+# library's own default (DEFAULT_POLL_TIMEOUT_SECONDS) as of 0.3.6, so
+# this flag is redundant with a current binary - kept explicit anyway so
+# this workflow's behavior doesn't silently change if that default is
+# ever tuned differently later. Shared across every pending result in one
+# run (resolver.poll_ai_triage_results polls them together), not applied
+# per result.
 
 name: CxOne AI Triage
 

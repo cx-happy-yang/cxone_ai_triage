@@ -77,7 +77,7 @@ RESULTS_PAGE_SIZE = 500
 # AiTriageResult.triageStatus values that mean "still working" per the SDK's
 # AiTriageResult docstring; anything else (including FAILED) is terminal.
 _IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS"}
-DEFAULT_POLL_TIMEOUT_SECONDS = 600
+DEFAULT_POLL_TIMEOUT_SECONDS = 180
 DEFAULT_POLL_INTERVAL_SECONDS = 15
 
 
