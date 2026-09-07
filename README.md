@@ -109,12 +109,22 @@ triaged CVE.
 
 `GET /api/results` has no `similarityId` filter, so every row for a scan is
 paged through (500 at a time) and cached per scan — unavoidable, but paid
-once per scan even across many ticket rows in the same batch. Pagination
-stops on the first short page (fewer rows returned than requested), not by
-comparing against the response's `totalCount` — a live tenant returned a
-`totalCount` matching just the first page's size for a scan that actually
-had 6500 results, which silently truncated the fetch after page 1 when the
-loop trusted it.
+once per scan even across many ticket rows in the same batch. Two things
+about that pagination, both confirmed against a live tenant rather than
+documented anywhere:
+
+- **`offset` is a page number (0-indexed), not a row-skip count** — despite
+  the SDK's own docstring ("offset: Items to skip"). With a real scan of
+  564 results and `limit=500`, `offset=500` (the "skip 500 rows" reading)
+  returned **0** rows; `offset=1` (the "give me page 1" reading — i.e. the
+  second page of 500) correctly returned the remaining 64. Advancing by
+  the number of rows already fetched — the natural reading of "items to
+  skip" — silently truncated every scan with more than one page.
+- Pagination stops on the first short page (fewer rows returned than
+  requested), not by comparing against the response's `totalCount` — the
+  same tenant returned a `totalCount` matching just the first page's size
+  for a scan with far more actual results, which would otherwise stop the
+  fetch after page 1 if the loop trusted it.
 
 ### Checking for an existing result before triggering
 

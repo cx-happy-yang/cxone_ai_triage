@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `_get_all_results` (`GET /api/results` pagination, hardened in 0.3.3)
+  still failed for any scan with more than one page of results, confirmed
+  live: `GET /api/results`'s `offset` parameter is a **page number**
+  (0-indexed), not a row-skip count, despite the SDK's own docstring
+  ("offset: Items to skip"). 0.3.3 advanced `offset` by the number of rows
+  already fetched (the natural "items to skip" reading) — for a real scan
+  with 564 results and `limit=500`, that meant requesting `offset=500` for
+  page 2, which the API read as "page #500" and correctly-per-that-reading
+  returned nothing, silently truncating the scan at 500 rows exactly as
+  before. `offset` now advances by 1 (the next page number) instead,
+  confirmed against that same live scan to correctly fetch all 564 rows
+  across 2 pages. Also enriches the "no such similarityId" `LookupError`
+  with the total row count and same-scanner-type row count actually
+  fetched, to make a genuine mismatch (e.g. a stale `scan_id`) easier to
+  tell apart from a fetch-coverage problem from the error message alone.
+
 ## [0.3.3]
 
 ### Fixed

@@ -8,8 +8,10 @@ Mapping of what a ticket gives us -> what POST /api/ai-triage/triage needs:
   result_hash (SAST) -> similarityId, via GET /api/sast-results?result-id=
   cve_id (SCA)        -> similarityId                        (the CVE ID *is*
                                                                the similarityId)
-  similarityId        -> alternateId, via GET /api/results (paged; no
-                          similarityId filter exists server-side)
+  similarityId        -> alternateId, via GET /api/results (paged - no
+                          similarityId filter exists server-side; see
+                          _get_all_results for a confirmed-live quirk in
+                          how that pagination actually works)
   scan_id             -> projectId, via GET /api/scans/{scanId}
 
 groupId (needed only to later poll GET /api/ai-triage/triage/{projectId}/{groupId},
@@ -116,25 +118,42 @@ class TriageResolver:
     def _get_all_results(self, scan_id: str) -> list:
         if scan_id not in self._results_by_scan:
             all_results = []
-            offset = 0
+            page_number = 0
             while True:
+                # GET /api/results' `offset` is a PAGE NUMBER (0-indexed),
+                # not a row-skip count, despite the SDK's own docstring
+                # ("offset: Items to skip") - confirmed empirically against
+                # a live tenant: with totalCount=564 and limit=500,
+                # offset=500 (the "skip 500 rows" interpretation) returned
+                # 0 rows, while offset=1 (the "give me page 1" - i.e. the
+                # second page of 500 - interpretation) correctly returned
+                # the remaining 64 rows. Advancing by len(page_results) (a
+                # row count) instead of by 1 (the next page number) was
+                # exactly why an earlier version of this fix still failed
+                # for any scan with more than one page of results.
                 page = self._scanner_results_api.get_all_scanners_results_by_scan_id(
-                    scan_id=scan_id, offset=offset, limit=RESULTS_PAGE_SIZE
+                    scan_id=scan_id, offset=page_number, limit=RESULTS_PAGE_SIZE
                 )
                 page_results = page["results"]
+                logger.debug(
+                    "scan %s: page %d (requested via offset=%d limit=%d) - got %d row(s), "
+                    "server-reported totalCount=%s",
+                    scan_id, page_number, page_number, RESULTS_PAGE_SIZE, len(page_results),
+                    page.get("totalCount"),
+                )
                 all_results.extend(page_results)
-                # Deliberately not trusting page["totalCount"] as the grand
-                # total to decide when to stop - a live tenant returned a
-                # totalCount matching just the first page's size (500) for a
-                # scan that actually had 6500 results, so `offset >= total`
-                # stopped the whole fetch after page 1. A short page (fewer
-                # rows than requested) is what actually means "last page".
+                # Not trusting page["totalCount"] to decide when to stop -
+                # the same live tenant also showed a totalCount matching
+                # just the first page's size for a scan with far more rows
+                # than that. A short page (fewer rows than requested) is
+                # what actually means "last page".
                 if len(page_results) < RESULTS_PAGE_SIZE:
                     break
-                offset += len(page_results)
+                page_number += 1
             self._results_by_scan[scan_id] = all_results
             logger.info(
-                "scan %s: fetched %d rows from /api/results", scan_id, len(all_results)
+                "scan %s: fetched %d rows from /api/results across %d page(s)",
+                scan_id, len(all_results), page_number + 1,
             )
         return self._results_by_scan[scan_id]
 
@@ -162,9 +181,10 @@ class TriageResolver:
         """Filter the full /api/results page for this scan down to the row
         matching this job's scanner type + similarityId, and return its
         alternateId (and, for SCA, packageIdentifier)."""
+        all_results = self._get_all_results(job.scan_id)
         matches = [
             r
-            for r in self._get_all_results(job.scan_id)
+            for r in all_results
             if (r.type or "").lower() == job.scanner_type
             and str(r.similarity_id) == str(similarity_id)
         ]
@@ -180,9 +200,17 @@ class TriageResolver:
                 matches = narrowed
 
         if not matches:
+            # Diagnostic counts, not just "not found" - tells us at a
+            # glance whether this looks like a fetch-coverage problem
+            # (total_fetched suspiciously small/round) or a genuine
+            # mismatch (plenty of same-type rows fetched, just none with
+            # this similarityId - e.g. a stale scan_id on the ticket vs.
+            # what the UI is showing for a newer scan of the same project).
+            same_type_count = sum(1 for r in all_results if (r.type or "").lower() == job.scanner_type)
             raise LookupError(
                 f"GET /api/results has no {job.scanner_type} row for scan {job.scan_id} "
-                f"with similarityId {similarity_id!r}"
+                f"with similarityId {similarity_id!r} (fetched {len(all_results)} total row(s), "
+                f"{same_type_count} of type {job.scanner_type!r} for this scan)"
             )
         if len(matches) > 1:
             packages = sorted(
