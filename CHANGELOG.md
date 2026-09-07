@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `examples/prudential-cxone-ai-triage.yaml` now passes `--poll-timeout 180`
+  explicitly, bounding the post-trigger wait for each AI Triage verdict to
+  3 minutes instead of the library default (10 minutes). Polling itself
+  (`resolver.poll_ai_triage_result`, called from `pipeline.run_pipeline`
+  after every trigger) already existed and ran by default — this just
+  tunes how long it waits per result before giving up, for this workflow
+  specifically. The library-wide default (`DEFAULT_POLL_TIMEOUT_SECONDS`)
+  is unchanged.
+
 ## [0.3.4]
 
 ### Fixed
