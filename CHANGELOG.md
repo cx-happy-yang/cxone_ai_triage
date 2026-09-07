@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `_trigger_batch` now logs the exact `POST /api/ai-triage/triage` payload
+  (scanID, scannerType, resultIDs, and each result's groupId for
+  reference) and response (triageID, status, published) at `INFO` level.
+  Added while investigating a live report of a 3-`VulnerabilityId` SAST
+  ticket where only 1 of 3 results (all with distinct, correctly-resolved
+  similarity/alternate/group IDs, submitted together in one bucket sharing
+  one `triageID`) ended up with a real AI Triage verdict and Jira comment
+  — this makes the exact request/response visible on the next run instead
+  of only being inferable from the output report.
+
 ## [0.3.6]
 
 ### Changed

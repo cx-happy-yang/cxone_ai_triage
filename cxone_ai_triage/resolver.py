@@ -357,17 +357,27 @@ class TriageResolver:
         (scan_id, scanner_type) group, bucketing their alternateIds together.
         Updates each outcome in place; a failure here fails all of them.
         """
+        result_ids = [o.alternate_id for o in outcomes]
+        logger.info(
+            "scan %s: POST /api/ai-triage/triage payload - scanID=%s, bucket scannerType=%s "
+            "resultIDs=%s (groupIds for reference: %s)",
+            scan_id, scan_id, scanner_type, result_ids, [o.group_id for o in outcomes],
+        )
         try:
             request = AiTriageRequest(
                 scanID=scan_id,
                 buckets=[
                     TriageBucket(
                         scannerType=scanner_type,
-                        resultIDs=[o.alternate_id for o in outcomes],
+                        resultIDs=result_ids,
                     )
                 ],
             )
             response = self._ai_triage_api.trigger_ai_triage(request)
+            logger.info(
+                "scan %s: POST /api/ai-triage/triage response - triageID=%s status=%s published=%s",
+                scan_id, response.triageID, response.status, getattr(response, "published", None),
+            )
             for outcome in outcomes:
                 outcome.triage_id = response.triageID
                 outcome.status = response.status or "accepted"
