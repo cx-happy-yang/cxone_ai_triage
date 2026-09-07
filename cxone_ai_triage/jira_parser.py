@@ -4,6 +4,15 @@ free-text description (Jira wiki markup, as produced by the Checkmarx Jira
 integration) — see docs/jira-automation-setup.md for how the ticket gets
 here in the first place.
 
+Scanner type: prefers structured fields too - a populated VulnerabilityId
+field means SAST, a populated packageNameVersion or subtasks list means
+SCA - falling back to the 'Checkmarx (SAST)'/'Checkmarx (SCA)' description
+marker only if neither structured signal is present. A live ticket
+(RITSDEVSECOPS-43549) had VulnerabilityId1 populated but no such marker
+anywhere in its description (its template doesn't include Checkmarx's
+usual description boilerplate), which used to fail before this field ever
+got checked - see _infer_scanner_type.
+
 The Jira Automation rule dispatches only client_payload.issue_key; this
 tool fetches the ticket itself and shapes it into the jira_issue dict this
 module expects (see jira_client.JiraCommentClient.get_issue_for_triage):
@@ -80,13 +89,13 @@ def parse_jira_issue(jira_issue: dict) -> List[TriageJob]:
     description = jira_issue.get("description") or ""
     jira_meta = {k: jira_issue[k] for k in _META_FIELDS if jira_issue.get(k) is not None}
 
-    scanner_match = _SCANNER_TYPE_RE.search(description)
-    if not scanner_match:
+    scanner_type = _infer_scanner_type(jira_issue, description)
+    if not scanner_type:
         raise ValueError(
-            f"{ticket_key}: could not find a 'Checkmarx (SAST)' / 'Checkmarx (SCA)' "
-            "marker in the ticket description"
+            f"{ticket_key}: could not determine scanner type (checked VulnerabilityId1..5, "
+            "packageNameVersion, subtasks, and the ticket description for a "
+            "'Checkmarx (SAST)' / 'Checkmarx (SCA)' marker)"
         )
-    scanner_type = scanner_match.group(1).lower()
 
     scan_id = jira_issue.get("scanId") or _find_scan_id(description)
     if not scan_id:
@@ -102,6 +111,22 @@ def parse_jira_issue(jira_issue: dict) -> List[TriageJob]:
             jira_issue.get("subtasks"), jira_issue.get("packageNameVersion"),
         )
     raise ValueError(f"{ticket_key}: unsupported scanner type {scanner_type!r} for AI Triage")
+
+
+def _infer_scanner_type(jira_issue: dict, description: str) -> Optional[str]:
+    """SAST if any VulnerabilityId field is populated; SCA if
+    packageNameVersion or subtasks is populated (checked in that order, so
+    a ticket that somehow has both prefers SAST, matching how the rest of
+    the ticket template is structured); otherwise falls back to the
+    'Checkmarx (SAST)' / 'Checkmarx (SCA)' marker in the description, for
+    tickets whose template doesn't populate those structured fields at
+    all. Returns None if none of the above find anything."""
+    if any(jira_issue.get(field) for field in _VULNERABILITY_ID_FIELDS):
+        return "sast"
+    if jira_issue.get("packageNameVersion") or jira_issue.get("subtasks"):
+        return "sca"
+    match = _SCANNER_TYPE_RE.search(description)
+    return match.group(1).lower() if match else None
 
 
 def _find_scan_id(description: str) -> Optional[str]:

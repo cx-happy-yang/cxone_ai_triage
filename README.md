@@ -63,9 +63,15 @@ places in the resulting structured object, checked in this order:
    `/results/<a>/<b>/sast` links elsewhere in the template don't put scan ID
    and project ID in a consistent order); the SAST result identifier from
    the `result-id=` value (URL-decoded); the SCA CVE ID from a bare
-   `CVE-\d{4}-\d+` pattern anywhere in the text. The scanner type
-   (`Checkmarx (SAST)` / `Checkmarx (SCA)` marker) always comes from the
-   description — there's no structured field for it yet.
+   `CVE-\d{4}-\d+` pattern anywhere in the text.
+
+   The scanner type itself also prefers structured fields first: any
+   populated `VulnerabilityId` field means SAST, a populated
+   `packageNameVersion` or `subtasks` means SCA — the `Checkmarx (SAST)` /
+   `Checkmarx (SCA)` description marker is only checked as a last resort,
+   for tickets whose template doesn't populate any of those structured
+   fields at all (confirmed live on a real ticket whose description had no
+   such marker anywhere in it, but did have `VulnerabilityId1` set).
 
 From there, `POST /api/ai-triage/triage` needs more than what the ticket gives us:
 
