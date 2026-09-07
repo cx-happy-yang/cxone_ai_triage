@@ -189,7 +189,7 @@ after triggering, `cxone_ai_triage/pipeline.py` polls
 all of them per `--poll-interval`, not each job's own full poll loop run to
 completion before the next even starts) until each one's `triageStatus`
 leaves `NOT_TRIAGED`/`IN_PROGRESS` (or times out — `--poll-timeout`, default
-600s, counted from the same start for every job in the batch, not restarted
+180s, counted from the same start for every job in the batch, not restarted
 per remaining one). A job drops out of that polling as soon as its own
 result is ready, so a ticket with several results (multiple
 `VulnerabilityId`s, multiple SCA subtasks) finishes as fast as the slowest
@@ -354,7 +354,7 @@ exit code.
 
 Flags: `--no-poll` (trigger only, skip polling/commenting entirely),
 `--no-comment` (poll but don't post to Jira), `--poll-timeout` /
-`--poll-interval` (seconds, default 600 / 15).
+`--poll-interval` (seconds, default 180 / 15).
 
 ## Tests
 

@@ -87,7 +87,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--poll-timeout", type=int, default=DEFAULT_POLL_TIMEOUT_SECONDS,
-        help=f"Max seconds to wait per job for AI Triage to finish. Default: {DEFAULT_POLL_TIMEOUT_SECONDS}.",
+        help="Max seconds to wait for AI Triage to finish - shared across "
+             "every pending job in this run (all polled together), not "
+             f"restarted per job. Default: {DEFAULT_POLL_TIMEOUT_SECONDS}.",
     )
     parser.add_argument(
         "--poll-interval", type=int, default=DEFAULT_POLL_INTERVAL_SECONDS,

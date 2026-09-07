@@ -486,7 +486,7 @@ class TestPollAiTriageResult(unittest.TestCase):
         self.assertIs(result, terminal)
 
     def test_logs_each_status_check_so_a_long_wait_is_not_silent(self):
-        # A bounded-but-long wait (default timeout 600s) with zero log
+        # A bounded-but-long wait (default timeout 180s) with zero log
         # output in between looks indistinguishable from a hang in a live
         # GitHub Actions log - every check must be visible.
         terminal = AiTriageResult(triageStatus="VULNERABLE")
