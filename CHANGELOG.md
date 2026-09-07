@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.6]
 
 ### Changed
 - `DEFAULT_POLL_TIMEOUT_SECONDS` (the `--poll-timeout` default) lowered
