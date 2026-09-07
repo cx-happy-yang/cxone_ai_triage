@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.8]
+
 ### Fixed
 - `_check_existing_triage` no longer treats a stuck `IN_PROGRESS` status as
   "already exists" either (same reasoning already applied to `FAILED`). A
