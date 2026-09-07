@@ -68,7 +68,7 @@ Custom data:
 
 ```json
 {
-  "ref": "main",
+  "ref": "master",
   "inputs": {
     "issue_key": "{{issue.key.jsonEncode}}"
   }
@@ -76,7 +76,12 @@ Custom data:
 ```
 
 `ref` is the branch (or tag) the workflow file should be read from and run
-against — usually the repo's default branch. The workflow file in the URL
+against — must match whatever branch the workflow file with the
+`workflow_dispatch` trigger actually lives on (`master` for
+`happy-cook/JavaVulnerableLab` — verified live: the wrong `ref` produces a
+`422 Workflow does not have 'workflow_dispatch' trigger`, since GitHub
+looks up the trigger definition on that exact branch, not whatever the
+default branch happens to be elsewhere). The workflow file in the URL
 (`cxone-AI-Triage.yaml`) can be the filename (as above) or its numeric
 workflow ID; either works, but the filename doesn't change if the workflow
 gets recreated.
