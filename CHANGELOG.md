@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- `poll_ai_triage_result` now logs every status check (`INFO`), not just
+  the trigger and final outcome. With the default 600s timeout and no
+  progress output in between, a long-but-bounded wait (e.g. several
+  sequential findings on one ticket) was reported as looking like an
+  infinite loop in a live GitHub Actions log that just goes silent for
+  many minutes — it's not: the loop is always bounded by `timeout_seconds`
+  and raises `TimeoutError` if it's exceeded. This just makes that wait
+  visible instead of silent.
+
 ### Changed
 - `examples/prudential-cxone-ai-triage.yaml` now passes `--poll-timeout 180`
   explicitly, bounding the post-trigger wait for each AI Triage verdict to

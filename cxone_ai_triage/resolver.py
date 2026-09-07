@@ -438,6 +438,10 @@ class TriageResolver:
         """
         deadline = time.monotonic() + timeout_seconds
         result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+        logger.info(
+            "project %s group %s: AI Triage status=%s (waiting up to %ds, checking every %ds)",
+            project_id, group_id, result.triageStatus, timeout_seconds, interval_seconds,
+        )
         while (result.triageStatus or "NOT_TRIAGED") in _IN_PROGRESS_TRIAGE_STATUSES:
             if time.monotonic() >= deadline:
                 raise TimeoutError(
@@ -446,4 +450,7 @@ class TriageResolver:
                 )
             time.sleep(interval_seconds)
             result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+            logger.info(
+                "project %s group %s: AI Triage status=%s", project_id, group_id, result.triageStatus,
+            )
         return result
