@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.1]
 
 ### Added
 - `github_event.load_issue_key` now also reads `inputs.issue_key` (a
