@@ -6,11 +6,19 @@
 # against this event's payload ($GITHUB_EVENT_PATH, read automatically —
 # see the repo's README "Usage" section), and upload the result.
 #
-# client_payload only ever needs to carry the ticket key (see
-# ../docs/jira-automation-setup.md and ../README.md "Why this exists") -
-# cxone-ai-triage fetches the full ticket (and its subtasks) itself via the
-# Jira REST API, using the JIRA_FIELD_* env vars below to know which custom
-# field is which.
+# Only ever needs to carry the ticket key (see ../docs/jira-automation-setup.md
+# and ../README.md "Why this exists") - cxone-ai-triage fetches the full
+# ticket (and its subtasks) itself via the Jira REST API, using the
+# JIRA_FIELD_* env vars below to know which custom field is which.
+#
+# Triggered on workflow_dispatch, not repository_dispatch: this org's
+# policy disables repository_dispatch entirely (confirmed by Prudential),
+# but workflow_dispatch is allowed. cxone_ai_triage's github_event.py reads
+# either shape, so only this workflow's `on:` trigger and the Jira
+# Automation rule's Send Web Request URL/body need to differ between the
+# two - nothing else changes. See docs/jira-automation-setup.md for the
+# repository_dispatch alternative, if some other org's policy allows it
+# instead.
 #
 # Required repo secrets (Settings -> Secrets and variables -> Actions, on
 # THIS repo, not cxone_ai_triage): CXONE_SERVER, CXONE_ACCESS_CONTROL_URL,
@@ -22,8 +30,12 @@
 name: CxOne AI Triage
 
 on:
-  repository_dispatch:
-    types: [cxone-ai-triage]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: 'Jira issue key (e.g. JVL-20)'
+        required: true
+        type: string
 
 jobs:
   triage:
@@ -31,7 +43,7 @@ jobs:
     steps:
       - name: Log incoming Jira payload
         run: |
-          echo "Jira issue key: ${{ github.event.client_payload.issue_key }}"
+          echo "Jira issue key: ${{ inputs.issue_key }}"
           echo "(cxone-ai-triage fetches the full ticket + subtasks itself - nothing more to log here)"
 
       - name: Download cxone-ai-triage

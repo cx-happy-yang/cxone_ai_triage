@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `github_event.load_issue_key` now also reads `inputs.issue_key` (a
+  `workflow_dispatch` event), not just `client_payload.issue_key`
+  (`repository_dispatch`) — some orgs' policies disable
+  `repository_dispatch` entirely (confirmed by Prudential against a real
+  org), while `workflow_dispatch` is allowed. Both are checked
+  automatically, so the same binary works with either without a rebuild;
+  only the workflow file's `on:` trigger and the Jira Automation rule's
+  Send Web Request URL/body need to change to switch between them.
+  `examples/prudential-cxone-ai-triage.yaml` and
+  `docs/jira-automation-setup.md` now document `workflow_dispatch` as the
+  primary path (with `repository_dispatch` kept as a documented
+  alternative). New `samples/github_event_workflow_dispatch.sample.json`;
+  `samples/github_event_issue_key.sample.json` renamed to
+  `samples/github_event_repository_dispatch.sample.json` for clarity.
+
 ## [0.3.0]
 
 ### Added
