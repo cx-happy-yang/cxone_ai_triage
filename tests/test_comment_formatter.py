@@ -12,7 +12,7 @@ from CheckmarxPythonSDK.CxOne.dto import (
     VulnerabilityMetadata,
 )
 
-from cxone_ai_triage.comment_formatter import format_comment
+from cxone_ai_triage.comment_formatter import build_vulnerability_marker_multi, format_comment
 
 
 class TestFormatComment(unittest.TestCase):
@@ -105,6 +105,32 @@ class TestFormatComment(unittest.TestCase):
         self.assertNotIn("*Vulnerability ID:*", comment)
         self.assertNotIn("*CVE ID:*", comment)
         self.assertNotIn("*Subtask:*", comment)
+
+    def test_vulnerability_labels_plural_lists_every_label_and_notes_the_grouping(self):
+        # 2+ VulnerabilityId/CVE values that share one AI Triage verdict
+        # (e.g. SAST findings that collapsed onto the same similarityId -
+        # see resolver._find_alternate_id and pipeline.run_pipeline).
+        comment = format_comment(
+            AiTriageResult(triageStatus="VULNERABLE"),
+            vulnerability_labels=["hash-one", "hash-two"],
+        )
+        self.assertTrue(comment.startswith("*Vulnerability IDs:* hash-one, hash-two."))
+        self.assertIn("grouped them under the same finding", comment)
+
+    def test_vulnerability_labels_takes_precedence_over_vulnerability_label(self):
+        comment = format_comment(
+            AiTriageResult(triageStatus="VULNERABLE"),
+            vulnerability_label="hash-solo",
+            vulnerability_labels=["hash-one", "hash-two"],
+        )
+        self.assertNotIn("hash-solo", comment)
+        self.assertTrue(comment.startswith("*Vulnerability IDs:* hash-one, hash-two."))
+
+    def test_build_vulnerability_marker_multi_pluralizes_the_label_name(self):
+        self.assertEqual(
+            build_vulnerability_marker_multi("CVE ID", ["CVE-2021-44228", "CVE-2022-23305"]),
+            "*CVE IDs:* CVE-2021-44228, CVE-2022-23305.",
+        )
 
     def test_jira_package_and_cxone_metadata_both_shown_when_present(self):
         comment = format_comment(

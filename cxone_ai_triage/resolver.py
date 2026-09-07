@@ -31,7 +31,20 @@ later. But the trigger call itself accepts multiple resultIDs in one
 bucket, so jobs sharing the same (scan_id, scanner_type) — e.g. a SAST
 ticket with several populated VulnerabilityId fields — are combined into a
 single POST /api/ai-triage/triage request instead of one per job, and all
-their outcomes get the same triageID back.
+their outcomes get the same triageID back. resultIDs are de-duplicated
+within a bucket before sending: two jobs whose findings collapse onto the
+same similarityId (see _find_alternate_id's SAST ambiguous-match handling)
+resolve to the same alternateId, and only need to be submitted once.
+
+Two or more jobs can end up sharing one groupId — most commonly two
+distinct SAST VulnerabilityId values that Checkmarx grouped under the same
+similarityId (a vulnerability *pattern*, not a specific occurrence). Since
+AI Triage only ever produces one verdict per groupId, these jobs are
+triggered once (see the resultID de-duplication above), their existing-
+triage pre-check and poll are only ever made once per groupId (see
+existing_by_group below and pipeline.run_pipeline's poll de-duplication),
+and pipeline.run_pipeline posts one shared Jira comment mentioning every
+one of their vulnerability labels rather than a comment per job.
 
 Before triggering, each resolved job (that has a groupId) is checked
 against GET /api/ai-triage/triage/{projectId}/{groupId} first. If a result
@@ -229,27 +242,35 @@ class TriageResolver:
             # SAST has no equivalent disambiguator (package_identifier is
             # SCA-only) - a live tenant showed 2 distinct VulnerabilityId
             # values (2 different resultHashes) genuinely sharing one
-            # similarityId (Checkmarx groups by vulnerability *pattern*,
-            # not by specific code location), with each /api/results row's
-            # `data` empty (unlike SCA's packageIdentifier). Logging every
-            # field on each ambiguous row so the next occurrence shows
-            # whatever else might disambiguate them (id/alternate_id/
-            # description/vulnerability_details/first_found_at/...).
+            # similarityId, because Checkmarx groups SAST findings by
+            # vulnerability *pattern* rather than by specific occurrence
+            # (each /api/results row's `data` was empty, unlike SCA's
+            # packageIdentifier). But unlike SCA, this doesn't need to be
+            # resolved precisely: groupId *is* the similarityId for SAST
+            # (see _resolve_group_id) and AI Triage only ever returns one
+            # verdict per groupId, so every row sharing this similarityId
+            # is an equally valid representative to submit in the trigger
+            # call - any one's alternateId works. resolve_and_trigger_all
+            # dedupes the resultIDs actually sent for the trigger call,
+            # and pipeline.run_pipeline groups these jobs' comments
+            # together (one shared comment naming every VulnerabilityId
+            # involved) rather than treating them as independent results.
+            # Logging every field on each row in case a real disambiguator
+            # (that would let each VulnerabilityId get its own precise
+            # verdict again) ever turns up.
             for m in matches:
-                logger.error(
-                    "%s: ambiguous sast row - id=%s alternate_id=%s data=%r "
-                    "description=%r vulnerability_details=%r first_found_at=%s "
-                    "found_at=%s created=%s",
-                    job.ticket_key or job.scan_id, m.id, m.alternate_id, m.data,
+                logger.info(
+                    "%s: %d sast rows share similarityId %r (not failing - "
+                    "using %s as the shared representative alternateId) - "
+                    "id=%s alternate_id=%s data=%r description=%r "
+                    "vulnerability_details=%r first_found_at=%s found_at=%s "
+                    "created=%s",
+                    job.ticket_key or job.scan_id, len(matches), similarity_id,
+                    matches[0].alternate_id, m.id, m.alternate_id, m.data,
                     m.description, m.vulnerability_details, m.first_found_at,
                     m.found_at, m.created,
                 )
-            raise LookupError(
-                f"{len(matches)} sast rows in scan {job.scan_id} share "
-                f"similarityId {similarity_id!r} with no way to disambiguate them "
-                f"(result_hash on the ticket: {job.result_hash!r}); see the logged "
-                "row details above"
-            )
+            matches = matches[:1]
 
         match = matches[0]
         package_identifier = None
@@ -392,8 +413,20 @@ class TriageResolver:
         """Trigger one POST /api/ai-triage/triage for every outcome in this
         (scan_id, scanner_type) group, bucketing their alternateIds together.
         Updates each outcome in place; a failure here fails all of them.
+
+        resultIDs are de-duplicated (order preserved) before being sent:
+        several outcomes can legitimately share one alternateId when their
+        jobs resolved to the same similarityId (see _find_alternate_id's
+        SAST ambiguous-match handling) - sending the same resultID twice
+        in one bucket would be a pointless duplicate, not two results.
         """
-        result_ids = [o.alternate_id for o in outcomes]
+        seen_ids = set()
+        result_ids = []
+        for o in outcomes:
+            if o.alternate_id in seen_ids:
+                continue
+            seen_ids.add(o.alternate_id)
+            result_ids.append(o.alternate_id)
         logger.info(
             "scan %s: POST /api/ai-triage/triage payload - scanID=%s, bucket scannerType=%s "
             "resultIDs=%s (groupIds for reference: %s)",
@@ -444,12 +477,21 @@ class TriageResolver:
         outcomes = [self._resolve_only(job) for job in jobs]
 
         batches: Dict[Tuple[str, str], List[TriageOutcome]] = defaultdict(list)
+        # Cached per (project_id, group_id) within this call: several jobs
+        # can share one group_id (e.g. multiple VulnerabilityId fields
+        # whose findings collapsed onto the same similarityId - see
+        # _find_alternate_id's SAST ambiguous-match handling), and there's
+        # no need to ask AI Triage about the same groupId more than once.
+        existing_by_group: Dict[Tuple[str, str], Optional[AiTriageResult]] = {}
         for job, outcome in zip(jobs, outcomes):
             if outcome.status == "failed":
                 continue
 
             if outcome.project_id and outcome.group_id:
-                existing = self._check_existing_triage(outcome.project_id, outcome.group_id)
+                group_key = (outcome.project_id, outcome.group_id)
+                if group_key not in existing_by_group:
+                    existing_by_group[group_key] = self._check_existing_triage(*group_key)
+                existing = existing_by_group[group_key]
                 if existing is not None:
                     outcome.status = "accepted"
                     outcome.trigger_skipped_reason = f"existing triageStatus={existing.triageStatus}"
