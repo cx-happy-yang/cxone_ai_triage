@@ -3,6 +3,18 @@
 ## [Unreleased]
 
 ### Changed
+- `pipeline.run_pipeline` now polls every job's AI Triage result together
+  via a new `resolver.poll_ai_triage_results` (one round of GETs across
+  all still-pending jobs per `--poll-interval`), instead of fully waiting
+  out each job's own `poll_ai_triage_result` loop to completion before
+  even starting the next one's. AI Triage can finish every result in a
+  batch trigger call around the same time server-side, so a ticket with
+  several `VulnerabilityId`s/CVEs no longer waits up to
+  `len(results) x --poll-timeout` in the worst case — a job drops out of
+  polling as soon as its own result is ready, and the whole run stops
+  waiting once every pending job's result has come back, not before.
+  `poll_ai_triage_result` (singular) is unchanged and still used wherever
+  only one target needs polling.
 - `examples/prudential-cxone-ai-triage.yaml` now passes `--poll-timeout 180`
   explicitly, bounding the post-trigger wait for each AI Triage verdict to
   3 minutes instead of the library default (10 minutes). Polling itself

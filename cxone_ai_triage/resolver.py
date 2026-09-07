@@ -447,3 +447,62 @@ class TriageResolver:
             time.sleep(interval_seconds)
             result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
         return result
+
+    def poll_ai_triage_results(
+        self,
+        targets: List[Tuple[str, str]],
+        timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
+        interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS,
+    ) -> List[object]:
+        """Poll several (projectId, groupId) pairs together, one GET per
+        still-pending target per round, sleeping once per round rather than
+        polling each target's own full wait to completion before starting
+        the next. AI Triage can process every result in a batch trigger
+        call around the same time server-side, so waiting on them one at a
+        time (poll_ai_triage_result in a loop) can take up to
+        len(targets) x as long as necessary for no reason - this stops as
+        soon as every target has resolved, not after each one individually
+        exhausts its own poll loop.
+
+        Returns a list the same length and order as `targets`; each entry
+        is either the finished AiTriageResult or an Exception (a
+        TimeoutError if timeout_seconds elapses - shared across all
+        targets from this call's start, not restarted per remaining one -
+        or whatever retrieve_ai_triage_results itself raised) - callers
+        that want the single-target behavior's "raise on failure" should
+        check `isinstance(item, Exception)` themselves; this never raises.
+        """
+        n = len(targets)
+        results: List[Optional[AiTriageResult]] = [None] * n
+        errors: List[Optional[Exception]] = [None] * n
+        pending = set(range(n))
+
+        def poll_round():
+            for i in list(pending):
+                project_id, group_id = targets[i]
+                try:
+                    result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
+                except Exception as e:  # noqa: BLE001 - recorded per-target, not raised
+                    errors[i] = e
+                    pending.discard(i)
+                    continue
+                results[i] = result
+                if (result.triageStatus or "NOT_TRIAGED") not in _IN_PROGRESS_TRIAGE_STATUSES:
+                    pending.discard(i)
+
+        deadline = time.monotonic() + timeout_seconds
+        poll_round()
+        while pending:
+            if time.monotonic() >= deadline:
+                for i in pending:
+                    project_id, group_id = targets[i]
+                    last_status = results[i].triageStatus if results[i] else None
+                    errors[i] = TimeoutError(
+                        f"AI Triage for project {project_id} group {group_id} did not "
+                        f"finish within {timeout_seconds}s (last status: {last_status!r})"
+                    )
+                break
+            time.sleep(interval_seconds)
+            poll_round()
+
+        return [errors[i] if errors[i] is not None else results[i] for i in range(n)]
