@@ -57,6 +57,7 @@ def format_comment(
     vulnerability_label_name: str = "Vulnerability ID",
     subtask_key: Optional[str] = None,
     vulnerability_labels: Optional[List[str]] = None,
+    triage_status_override: Optional[str] = None,
 ) -> str:
     """Build one paragraph (sentence per field group, joined with spaces).
 
@@ -78,6 +79,10 @@ def format_comment(
             onto the same similarityId — see
             resolver._find_alternate_id and pipeline.run_pipeline). Takes
             precedence over vulnerability_label when given.
+        triage_status_override: Show this as the verdict instead of
+            result.triageStatus — e.g. when the pipeline translated a
+            transient TO_VERIFY into the settled risk state from
+            GET /api/risks. Falls back to result.triageStatus when falsy.
     """
     parts: List[str] = []
 
@@ -97,7 +102,9 @@ def format_comment(
             "*Note:* this is a mock/placeholder AI Triage result, not a live verdict."
         )
 
-    parts.append(f"*CxOne AI Triage verdict:* {result.triageStatus or 'UNKNOWN'}.")
+    parts.append(
+        f"*CxOne AI Triage verdict:* {triage_status_override or result.triageStatus or 'UNKNOWN'}."
+    )
 
     analysis = result.analysis
     confidence = analysis.confidence if analysis else None

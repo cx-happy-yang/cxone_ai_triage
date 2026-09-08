@@ -12,6 +12,17 @@
   post the Jira comment from the available data instead of posting nothing
   (a still-`IN_PROGRESS` job at the deadline still times out as before).
 
+### Added
+- When a polled SCA result is `TO_VERIFY` (analysis complete but the
+  verdict state not settled on the triage endpoint), `run_pipeline` now
+  consults `GET /api/risks` for the settled state and uses it for the
+  comment — a live tenant's SCA triage stayed `TO_VERIFY` on the triage
+  endpoint, byte-identical every round, while the risks view (what the UI
+  shows) already held `PROPOSED_NOT_EXPLOITABLE`. The lookup matches on
+  the triaged `groupId` so a different risk's state is never borrowed; if
+  the risks view has no matching entry (or the lookup fails), the
+  `TO_VERIFY` result is kept as-is.
+
 ## [0.3.12]
 
 ### Changed

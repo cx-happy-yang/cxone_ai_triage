@@ -677,6 +677,47 @@ class TriageResolver:
         )
         return None
 
+    def lookup_sca_risk_state(
+        self, project_id: str, cve_id: str, group_id: str
+    ) -> Optional[str]:
+        """Return the settled risk state from GET /api/risks for an SCA CVE.
+
+        The AI Triage GET can keep serving triageStatus=TO_VERIFY (analysis
+        complete) long after the risks view holds the settled state - a
+        live tenant's SCA result stayed TO_VERIFY for the whole poll
+        window, byte-identical every round, while the UI (which reads the
+        risks view) already showed PROPOSED_NOT_EXPLOITABLE. The risks
+        view is the settled source of truth, so callers can translate the
+        transient TO_VERIFY into the real state before reporting. Returns
+        None when the risks view has no entry matching the triaged groupId
+        or the lookup itself fails - callers keep the triage result as-is.
+        """
+        try:
+            resp = self._risks_api.get_risks(
+                project_id=project_id, engine=["SCA"], risk_name=[cve_id], limit=200
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort translation only
+            logger.warning(
+                "Settled-state lookup failed for CVE %s in project %s (keeping the triage "
+                "result as-is): %s",
+                cve_id, project_id, e,
+            )
+            return None
+        matches = [r for r in resp.risks if r.groupId == group_id]
+        if not matches:
+            logger.info(
+                "GET /api/risks has no entry with groupId %s for CVE %s in project %s; "
+                "keeping the triage result as-is",
+                group_id, cve_id, project_id,
+            )
+            return None
+        state = matches[0].state
+        logger.info(
+            "GET /api/risks reports settled state %s for CVE %s group %s (changed by %s)",
+            state, cve_id, group_id, matches[0].stateChangedBy,
+        )
+        return state
+
     def poll_ai_triage_result(
         self,
         project_id: str,

@@ -115,6 +115,27 @@ def run_pipeline(
             outcome.exploitability_status = result.exploitabilityStatus
             outcome.attackability_status = result.attackabilityStatus
             outcome.ai_triage_summary = result.summary
+            if (
+                outcome.ai_triage_status == "TO_VERIFY"
+                and job.scanner_type == "sca"
+                and job.cve_id
+                and outcome.group_id
+            ):
+                # The triage endpoint can keep serving TO_VERIFY (analysis
+                # complete) long after the risks view holds the settled
+                # state; the risks view is what the UI shows. Translate to
+                # the settled state for the comment - or keep TO_VERIFY
+                # when the risks view has nothing yet.
+                settled_state = resolver.lookup_sca_risk_state(
+                    outcome.project_id, job.cve_id, outcome.group_id
+                )
+                if settled_state and settled_state != "TO_VERIFY":
+                    logger.info(
+                        "%s: AI Triage reported TO_VERIFY but the settled risk state is %s; "
+                        "using the settled state for the comment",
+                        job.ticket_key or job.scan_id, settled_state,
+                    )
+                    outcome.ai_triage_status = settled_state
             triaged.append((job, outcome, result))
 
     if not post_comment or not jira_client:
@@ -242,6 +263,7 @@ def _post_single_comment(
             vulnerability_label=vulnerability_label,
             vulnerability_label_name=vulnerability_label_name,
             subtask_key=job.jira_meta.get("subtask_key"),
+            triage_status_override=outcome.ai_triage_status,
         )
         # Always the parent ticket key (job.ticket_key) - never a
         # subtask, even when this job was resolved from one.
@@ -258,7 +280,7 @@ def _post_grouped_comment(members: List[TriagedJob], jira_client: JiraCommentCli
     _group_for_comments) - mentioning every one of those labels instead of
     picking just one, since AI Triage produced one verdict that applies to
     all of them equally."""
-    job0, _, result = members[0]
+    job0, outcome0, result = members[0]
     ticket_key = job0.ticket_key
     vulnerability_label_name = "CVE ID" if job0.scanner_type == "sca" else "Vulnerability ID"
     labels = _distinct_vulnerability_labels(members)
@@ -285,6 +307,7 @@ def _post_grouped_comment(members: List[TriagedJob], jira_client: JiraCommentCli
             vulnerability_labels=labels,
             vulnerability_label_name=vulnerability_label_name,
             subtask_key=job0.jira_meta.get("subtask_key"),
+            triage_status_override=outcome0.ai_triage_status,
         )
         jira_client.add_comment(ticket_key, comment)
         for _, outcome, _ in members:

@@ -13,14 +13,20 @@ class FakeResolver:
     (the batch method pipeline.py actually calls) returns the same
     preconfigured AiTriageResult or Exception for every target requested."""
 
-    def __init__(self, outcome_by_scan=None, poll_result=None, poll_error=None):
+    def __init__(self, outcome_by_scan=None, poll_result=None, poll_error=None, risk_state=None):
         self.outcome_by_scan = outcome_by_scan or {}
         self.poll_result = poll_result
         self.poll_error = poll_error
+        self.risk_state = risk_state
         self.poll_calls = []
+        self.risk_state_lookup_calls = []
 
     def resolve_and_trigger_all(self, jobs) -> list:
         return [self.outcome_by_scan[job.scan_id] for job in jobs]
+
+    def lookup_sca_risk_state(self, project_id, cve_id, group_id):
+        self.risk_state_lookup_calls.append((project_id, cve_id, group_id))
+        return self.risk_state
 
     def poll_ai_triage_results(self, targets, timeout_seconds=180, interval_seconds=15):
         results = []
@@ -75,6 +81,73 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(len(jira_client.comments), 1)
         self.assertEqual(jira_client.comments[0][0], "JVL-2")
         self.assertIn("PROPOSED_NOT_EXPLOITABLE", jira_client.comments[0][1])
+
+    def test_to_verify_sca_result_uses_the_settled_risk_state_for_the_comment(self):
+        # A live tenant's SCA triage stayed TO_VERIFY on the triage
+        # endpoint (analysis complete) while the risks view already held
+        # the settled PROPOSED_NOT_EXPLOITABLE state. The comment must
+        # carry the settled state, not the transient TO_VERIFY.
+        job = TriageJob(
+            scan_id="s1", scanner_type="sca", ticket_key="JVL-11",
+            cve_id="CVE-2021-21345",
+        )
+        outcome = make_accepted_outcome(job, group_id="CVE-2021-21345#-#pkg#-#proj-1")
+        result = AiTriageResult(
+            triageStatus="TO_VERIFY",
+            reachabilityStatus="NOT_REACHABLE",
+            exploitabilityStatus="NOT_EXPLOITABLE",
+        )
+        resolver = FakeResolver(
+            outcome_by_scan={"s1": outcome}, poll_result=result,
+            risk_state="PROPOSED_NOT_EXPLOITABLE",
+        )
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(outcomes[0].ai_triage_status, "PROPOSED_NOT_EXPLOITABLE")
+        self.assertEqual(
+            resolver.risk_state_lookup_calls,
+            [("proj-1", "CVE-2021-21345", "CVE-2021-21345#-#pkg#-#proj-1")],
+        )
+        self.assertIn("PROPOSED_NOT_EXPLOITABLE", jira_client.comments[0][1])
+        self.assertNotIn("TO_VERIFY", jira_client.comments[0][1])
+
+    def test_to_verify_sca_result_is_kept_as_is_when_the_risks_view_has_no_settled_state(self):
+        # /api/risks has no entry (or the lookup fails): keep TO_VERIFY.
+        job = TriageJob(
+            scan_id="s1", scanner_type="sca", ticket_key="JVL-11",
+            cve_id="CVE-2021-21345",
+        )
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="TO_VERIFY")
+        resolver = FakeResolver(
+            outcome_by_scan={"s1": outcome}, poll_result=result, risk_state=None
+        )
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(outcomes[0].ai_triage_status, "TO_VERIFY")
+        self.assertIn("TO_VERIFY", jira_client.comments[0][1])
+
+    def test_to_verify_sast_result_is_not_translated_through_the_risks_view(self):
+        # The risks-state translation is SCA-only; a SAST TO_VERIFY keeps
+        # its own status (SAST settles through the poll itself - see
+        # test_resolver).
+        job = TriageJob(scan_id="s1", scanner_type="sast", ticket_key="JVL-2", result_hash="h1")
+        outcome = make_accepted_outcome(job)
+        result = AiTriageResult(triageStatus="TO_VERIFY")
+        resolver = FakeResolver(
+            outcome_by_scan={"s1": outcome}, poll_result=result,
+            risk_state="PROPOSED_NOT_EXPLOITABLE",
+        )
+        jira_client = FakeJiraClient()
+
+        outcomes = run_pipeline([job], resolver, jira_client)
+
+        self.assertEqual(outcomes[0].ai_triage_status, "TO_VERIFY")
+        self.assertEqual(resolver.risk_state_lookup_calls, [])
 
     def test_sca_job_package_name_version_is_passed_into_the_comment(self):
         job = TriageJob(
