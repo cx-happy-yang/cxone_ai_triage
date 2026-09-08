@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- `DEFAULT_POLL_TIMEOUT_SECONDS` (the `--poll-timeout` default) raised from
+  180s to 300s. 180s proved too tight for real triage jobs: SAST verdicts
+  land around the 2.5-minute mark and a live tenant's SCA run timed out
+  with one CVE still `IN_PROGRESS` and another still settling on
+  `TO_VERIFY` (verdict visible in the UI shortly after). 300s still bounds
+  the stuck-job case; verdicts that settle later are picked up by the next
+  run's existing-triage pre-check as before.
+
 ## [0.3.11]
 
 ### Fixed
