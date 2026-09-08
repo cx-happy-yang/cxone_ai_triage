@@ -94,9 +94,14 @@ logger = logging.getLogger("cxone_ai_triage")
 # round-trips.
 RESULTS_PAGE_SIZE = 500
 
-# AiTriageResult.triageStatus values that mean "still working" per the SDK's
-# AiTriageResult docstring; anything else (including FAILED) is terminal.
-_IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS"}
+# AiTriageResult.triageStatus values that mean "still working"; anything
+# else (including FAILED) is terminal. TO_VERIFY isn't in the SDK's
+# documented enum either, but a live tenant showed the API serving it
+# briefly right after a triage job completed - the verdict's state change
+# (e.g. to PROPOSED_NOT_EXPLOITABLE) landed moments later. Treating it as
+# terminal would post a Jira comment carrying the transient state, so it
+# counts as "still working" and the poll waits for the settled verdict.
+_IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS", "TO_VERIFY"}
 
 # A 200 whose body has neither triageStatus nor the IN_PROGRESS job-status
 # envelope (see _effective_triage_status) is off-schema. Pollers tolerate
@@ -605,19 +610,33 @@ class TriageResolver:
         result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
         raw_body = None
         if not result.triageStatus:
-            try:
-                url = (
-                    f"{self._ai_triage_api.base_url}/triage/{project_id}/"
-                    f"{quote(str(group_id), safe='')}"
+            last_error = None
+            for attempt in range(2):
+                try:
+                    url = (
+                        f"{self._ai_triage_api.base_url}/triage/{project_id}/"
+                        f"{quote(str(group_id), safe='')}"
+                    )
+                    response = self._ai_triage_api.api_client.call_api(
+                        method="GET",
+                        url=url,
+                        headers={"Accept": "application/json"},
+                    )
+                    raw_body = response.json()
+                    break
+                except Exception as e:  # noqa: BLE001 - raw body is best-effort diagnosis only
+                    # One live tenant's API flapped between 200 (the job
+                    # envelope) and 404 for two identical GETs a moment
+                    # apart - retry once before giving up on the body.
+                    last_error = e
+                    if attempt == 0:
+                        time.sleep(1)
+            if raw_body is None:
+                logger.warning(
+                    "project %s group %s: raw triage response body could not be fetched "
+                    "for diagnosis after 2 attempts (last error: %s)",
+                    project_id, group_id, last_error,
                 )
-                response = self._ai_triage_api.api_client.call_api(
-                    method="GET",
-                    url=url,
-                    headers={"Accept": "application/json"},
-                )
-                raw_body = response.json()
-            except Exception:  # noqa: BLE001 - raw body is best-effort diagnosis only
-                raw_body = None
         return result, raw_body
 
     def _effective_triage_status(

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- `triageStatus=TO_VERIFY` (a result *state* value the API serves briefly
+  right after a triage job completes, before the verdict's state change
+  lands) now counts as "still working" for the poll loop instead of being
+  treated as terminal — a live tenant's run captured `TO_VERIFY` and posted
+  a Jira comment with that transient state while the UI already showed the
+  settled `PROPOSED_NOT_EXPLOITABLE` verdict moments later.
+- The raw-body capture in `_retrieve_triage_result` now retries once when
+  its follow-up GET fails — a live tenant's API flapped between 200 (the
+  job-status envelope) and 404 for two identical GETs a moment apart,
+  which made that poll round look "off-schema" and counted toward the
+  fail-fast.
+
 ## [0.3.10]
 
 ### Fixed
