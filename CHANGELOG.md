@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.11]
+
 ### Fixed
 - `triageStatus=TO_VERIFY` (a result *state* value the API serves briefly
   right after a triage job completes, before the verdict's state change
