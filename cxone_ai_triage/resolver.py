@@ -17,13 +17,19 @@ Mapping of what a ticket gives us -> what POST /api/ai-triage/triage needs:
 groupId (needed only to later poll GET /api/ai-triage/triage/{projectId}/{groupId},
 not for the trigger call itself) is resolved as:
   - SAST: it *is* the similarityId (per AiTriageAPI docstring).
-  - SCA: looked up from GET /api/risks rather than hand-built, since the
-    "similarityId+packageIdentifier+projectId" concatenation format isn't
-    documented anywhere in the SDK/API and /api/risks returns the
-    authoritative value directly. /api/risks aggregates at the *project*
-    level, not per scan, so a scanId match is only used to disambiguate
-    between several risks sharing one CVE - never as a hard filter that
-    could discard the only match (see _resolve_group_id).
+  - SCA: looked up from GET /api/risks as the authoritative source,
+    falling back to the manually-constructed format documented in the API
+    reference ("Retrieve AI Triage Results" - "If necessary, you can
+    construct the group_id manually"): similarityId#-#packageIdentifier#-#
+    projectId, with packageIdentifier taken from the matched /api/results
+    row's data. The fallback exists because /api/risks can lag the results
+    view - a live tenant showed risks returning no entry at all for a CVE
+    whose /api/results rows clearly exist, which left groupId blank and
+    made the pipeline skip AI Triage result polling entirely (see
+    _resolve_group_id). /api/risks aggregates at the *project* level, not
+    per scan, so a scanId match is only used to disambiguate between
+    several risks sharing one CVE - never as a hard filter that could
+    discard the only match.
 
 Batching: resultID resolution (similarityId -> alternateId, groupId, ...) is
 always per-job, since each result has its own distinct groupId to poll
@@ -306,8 +312,26 @@ class TriageResolver:
         return match.alternate_id, package_identifier
 
     def _resolve_group_id(
-        self, job: TriageJob, project_id: str, similarity_id: str
+        self,
+        job: TriageJob,
+        project_id: str,
+        similarity_id: str,
+        package_identifier: Optional[str] = None,
     ) -> Optional[str]:
+        """Resolve the SCA groupId for polling GET /api/ai-triage/triage.
+
+        GET /api/risks is the authoritative source, but its view can lag the
+        results view (a live tenant showed no risks entry at all for a CVE
+        whose /api/results rows clearly exist - the trigger was accepted but
+        groupId stayed blank and the pipeline skipped result polling
+        entirely). In that case the groupId is constructed from the format
+        documented in the API reference ("If necessary, you can construct
+        the group_id manually"): similarityId#-#packageIdentifier#-#projectId
+        - with packageIdentifier coming from the matched /api/results row's
+        data, not from the ticket. If neither source yields a groupId, the
+        trigger still fires (it doesn't need one) but result polling is
+        skipped by pipeline.run_pipeline.
+        """
         if job.scanner_type == "sast":
             return similarity_id
 
@@ -316,9 +340,18 @@ class TriageResolver:
         )
         candidates = resp.risks
         if not candidates:
+            if package_identifier:
+                group_id = f"{similarity_id}#-#{package_identifier}#-#{project_id}"
+                logger.info(
+                    "GET /api/risks has no entry for CVE %s in project %s; constructed "
+                    "groupId %r from similarityId#-#packageIdentifier#-#projectId",
+                    job.cve_id, project_id, group_id,
+                )
+                return group_id
             logger.warning(
-                "GET /api/risks has no entry at all for CVE %s in project %s; "
-                "groupId left blank (does not block the trigger call).",
+                "GET /api/risks has no entry at all for CVE %s in project %s and no "
+                "packageIdentifier to construct the groupId from; groupId left blank "
+                "(does not block the trigger call, but skips result polling).",
                 job.cve_id, project_id,
             )
             return None
@@ -371,7 +404,7 @@ class TriageResolver:
                 job, outcome.similarity_id
             )
             outcome.group_id = self._resolve_group_id(
-                job, outcome.project_id, outcome.similarity_id
+                job, outcome.project_id, outcome.similarity_id, outcome.package_identifier
             )
         except Exception as e:  # noqa: BLE001 - keep the batch going on a per-row failure
             outcome.status = "failed"
