@@ -758,6 +758,47 @@ class TestPollAiTriageResult(unittest.TestCase):
         self.assertIn("IN_PROGRESS", str(cm.exception))
 
     @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_polls_past_a_transient_to_verify_status_until_the_settled_verdict(self, mock_sleep):
+        # A live tenant showed the API serving triageStatus=TO_VERIFY right
+        # after a triage job completed, with the settled verdict (e.g.
+        # PROPOSED_NOT_EXPLOITABLE) landing moments later. Posting a Jira
+        # comment with the transient state would mislead, so keep polling.
+        responses = iter([
+            AiTriageResult(triageStatus="TO_VERIFY"),
+            AiTriageResult(triageStatus="PROPOSED_NOT_EXPLOITABLE"),
+        ])
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = lambda p, g: next(responses)
+        result = self.resolver.poll_ai_triage_result(
+            PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+        )
+        self.assertEqual(result.triageStatus, "PROPOSED_NOT_EXPLOITABLE")
+        self.assertEqual(mock_sleep.call_count, 1)
+
+    def test_raw_body_fetch_retries_once_after_a_transient_failure(self):
+        # The API has been observed returning the job envelope on one GET
+        # and 404 on the identical follow-up GET a moment later; the raw
+        # body fetch retries once before giving up.
+        from types import SimpleNamespace
+
+        attempts = []
+
+        def flappy(method, url, headers):
+            attempts.append(url)
+            if len(attempts) == 1:
+                raise RuntimeError("transient 404")
+            return SimpleNamespace(json=lambda: {"jobStatus": "IN_PROGRESS"})
+
+        self.resolver._ai_triage_api.api_client.call_api = flappy
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus=None)
+        )
+        with patch("cxone_ai_triage.resolver.time.sleep") as mock_sleep:
+            result, raw = self.resolver._retrieve_triage_result(PROJECT_ID, "group-1")
+        self.assertEqual(raw, {"jobStatus": "IN_PROGRESS"})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(mock_sleep.call_count, 1)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
     def test_job_status_envelope_with_a_non_in_progress_status_fails_fast(self, mock_sleep):
         # An envelope whose jobStatus is not IN_PROGRESS (e.g. FAILED) will
         # never turn into a result on its own - fail fast with the raw body
