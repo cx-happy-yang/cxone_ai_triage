@@ -698,6 +698,15 @@ class TriageResolver:
         whole timeout window. Exception: the {projectID, groupID,
         jobStatus: IN_PROGRESS} envelope the API returns while the triage
         job is still running counts as IN_PROGRESS and keeps polling.
+
+        A TO_VERIFY that is still TO_VERIFY when the deadline hits is
+        returned as-is rather than raised as a TimeoutError: the analysis
+        itself is complete (reachability/exploitability are populated), it
+        is only the verdict's state change that hasn't settled - a live
+        tenant's SCA result stayed TO_VERIFY for the whole window while
+        the UI already showed PROPOSED_NOT_EXPLOITABLE. Returning it lets
+        the run post the comment from the available data instead of
+        posting nothing.
         """
         deadline = time.monotonic() + timeout_seconds
         result, raw_body = self._retrieve_triage_result(project_id, group_id)
@@ -709,6 +718,13 @@ class TriageResolver:
         )
         while (status or "NOT_TRIAGED") in _IN_PROGRESS_TRIAGE_STATUSES:
             if time.monotonic() >= deadline:
+                if status == "TO_VERIFY":
+                    logger.warning(
+                        "project %s group %s: AI Triage stayed TO_VERIFY until the poll "
+                        "deadline; using the completed analysis as-is",
+                        project_id, group_id,
+                    )
+                    return result
                 raise TimeoutError(
                     f"AI Triage for project {project_id} group {group_id} did not "
                     f"finish within {timeout_seconds}s (last status: {status!r})"
@@ -749,6 +765,11 @@ class TriageResolver:
         groupID, jobStatus: IN_PROGRESS}) the API serves while a triage
         job is still running is the exception: it counts as IN_PROGRESS
         and keeps polling.
+
+        A target still TO_VERIFY when the deadline hits returns its result
+        as-is (the analysis is complete; only the verdict's state change
+        hasn't settled - see poll_ai_triage_result) instead of a
+        TimeoutError.
 
         Returns a list the same length and order as `targets`; each entry
         is either the finished AiTriageResult or an Exception (a
@@ -801,6 +822,13 @@ class TriageResolver:
             if time.monotonic() >= deadline:
                 for i in pending:
                     project_id, group_id = targets[i]
+                    if last_statuses[i] == "TO_VERIFY":
+                        logger.warning(
+                            "project %s group %s: AI Triage stayed TO_VERIFY until the poll "
+                            "deadline; using the completed analysis as-is",
+                            project_id, group_id,
+                        )
+                        continue  # errors[i] stays None -> results[i] is returned
                     errors[i] = TimeoutError(
                         f"AI Triage for project {project_id} group {group_id} did not "
                         f"finish within {timeout_seconds}s (last status: {last_statuses[i]!r})"

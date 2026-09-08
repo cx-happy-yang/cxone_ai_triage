@@ -774,6 +774,28 @@ class TestPollAiTriageResult(unittest.TestCase):
         self.assertEqual(result.triageStatus, "PROPOSED_NOT_EXPLOITABLE")
         self.assertEqual(mock_sleep.call_count, 1)
 
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_to_verify_at_the_deadline_is_returned_as_is_instead_of_timing_out(self, mock_sleep):
+        # A live tenant's SCA result stayed TO_VERIFY (analysis complete)
+        # for the whole poll window while the UI already showed the settled
+        # PROPOSED_NOT_EXPLOITABLE state - the endpoint never settled. The
+        # completed analysis is still usable: return it at the deadline
+        # instead of raising TimeoutError so the run posts the comment.
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(
+                triageStatus="TO_VERIFY",
+                reachabilityStatus="NOT_REACHABLE",
+                exploitabilityStatus="NOT_EXPLOITABLE",
+            )
+        )
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            result = self.resolver.poll_ai_triage_result(
+                PROJECT_ID, "group-1", timeout_seconds=2, interval_seconds=1
+            )
+        self.assertEqual(result.triageStatus, "TO_VERIFY")
+        self.assertEqual(result.reachabilityStatus, "NOT_REACHABLE")
+        self.assertEqual(result.exploitabilityStatus, "NOT_EXPLOITABLE")
+
     def test_raw_body_fetch_retries_once_after_a_transient_failure(self):
         # The API has been observed returning the job envelope on one GET
         # and 404 on the identical follow-up GET a moment later; the raw
@@ -941,6 +963,30 @@ class TestPollAiTriageResults(unittest.TestCase):
         self.assertIn("placeholder", str(results[0]))
         self.assertEqual(results[1].triageStatus, "VULNERABLE")
         self.assertEqual(mock_sleep.call_count, 1)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_to_verify_target_returns_its_result_at_the_deadline_while_others_time_out(self, mock_sleep):
+        # Same TO_VERIFY-never-settles case on the batch path: the
+        # TO_VERIFY target's completed analysis is returned as-is at the
+        # deadline; a still-IN_PROGRESS target still gets a TimeoutError.
+        raw = {"projectID": PROJECT_ID, "groupID": "group-ip", "jobStatus": "IN_PROGRESS"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-tv":
+                return AiTriageResult(
+                    triageStatus="TO_VERIFY", reachabilityStatus="NOT_REACHABLE"
+                )
+            return AiTriageResult(triageStatus=None)
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            results = self.resolver.poll_ai_triage_results(
+                [(PROJECT_ID, "group-tv"), (PROJECT_ID, "group-ip")],
+                timeout_seconds=2, interval_seconds=1,
+            )
+        self.assertEqual(results[0].triageStatus, "TO_VERIFY")
+        self.assertIsInstance(results[1], TimeoutError)
 
     @patch("cxone_ai_triage.resolver.time.sleep")
     def test_in_progress_job_envelope_target_keeps_polling_while_others_resolve(self, mock_sleep):
