@@ -20,6 +20,7 @@ class FakeResolver:
         self.risk_state = risk_state
         self.poll_calls = []
         self.risk_state_lookup_calls = []
+        self.sca_cve_ids = None
 
     def resolve_and_trigger_all(self, jobs) -> list:
         return [self.outcome_by_scan[job.scan_id] for job in jobs]
@@ -28,7 +29,10 @@ class FakeResolver:
         self.risk_state_lookup_calls.append((project_id, cve_id, group_id))
         return self.risk_state
 
-    def poll_ai_triage_results(self, targets, timeout_seconds=180, interval_seconds=15):
+    def poll_ai_triage_results(
+        self, targets, timeout_seconds=180, interval_seconds=15, sca_cve_ids=None
+    ):
+        self.sca_cve_ids = sca_cve_ids
         results = []
         for project_id, group_id in targets:
             self.poll_calls.append((project_id, group_id))
@@ -81,6 +85,27 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(len(jira_client.comments), 1)
         self.assertEqual(jira_client.comments[0][0], "JVL-2")
         self.assertIn("PROPOSED_NOT_EXPLOITABLE", jira_client.comments[0][1])
+
+    def test_sca_cve_ids_are_passed_to_the_poller_for_risks_state_probing(self):
+        # The poller probes GET /api/risks for TO_VERIFY SCA targets, so
+        # the pipeline must tell it which CVE each SCA target is (None for
+        # non-SCA targets), parallel to the de-duplicated target list.
+        job_sca = TriageJob(
+            scan_id="s1", scanner_type="sca", ticket_key="JVL-11",
+            cve_id="CVE-2021-21345",
+        )
+        job_sast = TriageJob(scan_id="s2", scanner_type="sast", ticket_key="JVL-2", result_hash="h1")
+        outcome_sca = make_accepted_outcome(job_sca, group_id="group-sca")
+        outcome_sast = make_accepted_outcome(job_sast, group_id="group-sast")
+        result = AiTriageResult(triageStatus="VULNERABLE")
+        resolver = FakeResolver(
+            outcome_by_scan={"s1": outcome_sca, "s2": outcome_sast}, poll_result=result
+        )
+        jira_client = FakeJiraClient()
+
+        run_pipeline([job_sca, job_sast], resolver, jira_client)
+
+        self.assertEqual(resolver.sca_cve_ids, ["CVE-2021-21345", None])
 
     def test_to_verify_sca_result_uses_the_settled_risk_state_for_the_comment(self):
         # A live tenant's SCA triage stayed TO_VERIFY on the triage
