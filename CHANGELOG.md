@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+- A `GET /api/ai-triage/triage/{projectId}/{groupId}` response whose body
+  has no `triageStatus` at all (off-schema — the field is required per the
+  API docs) no longer silently degrades to a 180s poll timeout with
+  `ai_triage_status=None`. A live tenant showed exactly this: the trigger
+  was accepted (`202`, `published=True`) but every poll for the full
+  timeout window returned the same ~100-byte placeholder body, which
+  `AiTriageResult.from_dict` maps to `triageStatus=None`. Now
+  `_retrieve_triage_result` keeps the raw response body (one extra GET,
+  only when the parsed result is off-schema), `_count_missing_status`
+  logs it at `WARNING`, and both poll methods fail fast with the new
+  `AiTriageMissingStatusError` (raw body included in the message, surfaced
+  as `poll_error`) after 2 consecutive off-schema rounds instead of
+  burning the whole timeout window. `_check_existing_triage` also logs the
+  raw body when its pre-check gets an off-schema 200.
+
 ## [0.3.8]
 
 ### Fixed
