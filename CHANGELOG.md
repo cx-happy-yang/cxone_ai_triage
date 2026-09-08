@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.12]
+
 ### Changed
 - `DEFAULT_POLL_TIMEOUT_SECONDS` (the `--poll-timeout` default) raised from
   180s to 300s. 180s proved too tight for real triage jobs: SAST verdicts
