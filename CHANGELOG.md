@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.13]
+
 ### Fixed
 - A result that is still `triageStatus=TO_VERIFY` when the poll deadline
   hits is now returned as-is instead of raising `TimeoutError`. The
