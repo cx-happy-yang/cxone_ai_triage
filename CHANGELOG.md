@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.10]
+
 ### Fixed
 - SCA `groupId` now falls back to the manually-constructed
   `similarityId#-#packageIdentifier#-#projectId` format (documented in the
