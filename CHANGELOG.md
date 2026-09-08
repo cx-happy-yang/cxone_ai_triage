@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.14]
+
 ### Changed
 - Polling a `TO_VERIFY` SCA target now probes `GET /api/risks` for the
   settled state on every round (the pipeline passes each SCA target's CVE
