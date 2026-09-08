@@ -109,7 +109,12 @@ _IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS", "TO_VERIFY"}
 # fail with AiTriageMissingStatusError instead of burning the whole timeout
 # window.
 _MAX_MISSING_STATUS_ROUNDS = 2
-DEFAULT_POLL_TIMEOUT_SECONDS = 180
+# 180s proved too tight for real triage jobs: SAST verdicts land around
+# 2.5 minutes and SCA verdicts can pass the 3-minute mark entirely (a
+# live tenant's SCA run timed out with the verdict still settling). 300s
+# still bounds the stuck-job case without a 10-minute CI run; verdicts
+# that settle after the window are picked up by the next run's pre-check.
+DEFAULT_POLL_TIMEOUT_SECONDS = 300
 DEFAULT_POLL_INTERVAL_SECONDS = 15
 
 
