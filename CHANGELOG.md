@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+- A result that is still `triageStatus=TO_VERIFY` when the poll deadline
+  hits is now returned as-is instead of raising `TimeoutError`. The
+  analysis itself is complete at that point (reachability/exploitability
+  are populated) — only the verdict's state change hasn't settled: a live
+  tenant's SCA result stayed `TO_VERIFY` for the entire window while the
+  UI already showed `PROPOSED_NOT_EXPLOITABLE`. Returning it lets the run
+  post the Jira comment from the available data instead of posting nothing
+  (a still-`IN_PROGRESS` job at the deadline still times out as before).
+
 ## [0.3.12]
 
 ### Changed
