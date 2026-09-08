@@ -182,6 +182,54 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.package_identifier, "log4j-api-2.14.1")
         self.assertEqual(outcome.group_id, "groupid-for-CVE-2021-44228")
 
+    def test_sca_group_id_is_constructed_when_risks_view_has_no_entry(self):
+        # The AI Triage API reference documents constructing the SCA groupId
+        # manually as similarityId#-#packageIdentifier#-#projectId. GET
+        # /api/risks can lag the results view (a live tenant showed no risks
+        # entry at all for a CVE whose /api/results rows exist), and a blank
+        # groupId makes the pipeline skip result polling entirely - so fall
+        # back to the documented construction instead.
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(), risks=[],
+            )
+        )
+        job = TriageJob(
+            scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-9",
+            cve_id="CVE-2022-23305",
+        )
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertEqual(
+            outcome.group_id,
+            "CVE-2022-23305#-#log4j-core-2.14.1#-#proj-abc",
+        )
+
+    def test_sca_group_id_stays_blank_when_risks_empty_and_no_package_identifier(self):
+        # Without a packageIdentifier on the matched /api/results row there
+        # is nothing to construct the documented groupId format from - the
+        # blank-groupId path must remain (trigger still fires; the pipeline
+        # skips polling).
+        row = Result(
+            type="sca", id="r9", alternate_id="alt-no-pkg",
+            similarity_id="CVE-2023-0001", data=None,
+        )
+        self.resolver._scanner_results_api.get_all_scanners_results_by_scan_id = (
+            lambda scan_id, offset=0, limit=500, **kw: {"results": [row], "totalCount": 1}
+        )
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(), risks=[],
+            )
+        )
+        job = TriageJob(
+            scan_id=SCAN_ID, scanner_type="sca", ticket_key="T-9",
+            cve_id="CVE-2023-0001",
+        )
+        outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertIsNone(outcome.group_id)
+
     def test_group_id_is_still_resolved_when_the_risk_is_tagged_with_a_different_scan(self):
         # GET /api/risks aggregates at the project level - a live tenant
         # returned zero risks tagged with the ticket's scan_id for a CVE

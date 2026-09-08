@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- SCA `groupId` now falls back to the manually-constructed
+  `similarityId#-#packageIdentifier#-#projectId` format (documented in the
+  API reference, "Retrieve AI Triage Results" — "If necessary, you can
+  construct the group_id manually") when `GET /api/risks` has no entry for
+  the CVE. A live tenant showed the risks view lagging the results view:
+  the SCA trigger was accepted (`202`, `published=True`) but both CVEs'
+  `groupId`s stayed blank, so the pipeline skipped AI Triage result polling
+  entirely and the run ended with `aiTriageStatus=None`. The constructed
+  value uses the `packageIdentifier` from the matched `/api/results` row;
+  if that's also unavailable, `groupId` remains blank (trigger still fires,
+  polling skipped) as before.
+
 ## [0.3.9]
 
 ### Fixed
