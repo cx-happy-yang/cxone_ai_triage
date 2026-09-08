@@ -16,7 +16,11 @@ from CheckmarxPythonSDK.CxOne.dto import (
 )
 
 from cxone_ai_triage.models import TriageJob
-from cxone_ai_triage.resolver import RESULTS_PAGE_SIZE, TriageResolver
+from cxone_ai_triage.resolver import (
+    RESULTS_PAGE_SIZE,
+    AiTriageMissingStatusError,
+    TriageResolver,
+)
 
 SCAN_ID = "11111111-1111-1111-1111-111111111111"
 PROJECT_ID = "proj-abc"
@@ -42,6 +46,14 @@ _SAST_RESULTS_BY_HASH = {
     "hash-xyz": SastResult(result_hash="hash-xyz", similarity_id=123456),
     "hash-two": SastResult(result_hash="hash-two", similarity_id=654321),
 }
+
+
+def _fake_raw_body_response(raw):
+    """Stand-in for ApiClient.call_api's response when _retrieve_triage_result
+    does its best-effort raw-body GET for an off-schema result."""
+    from types import SimpleNamespace
+
+    return lambda method, url, headers: SimpleNamespace(json=lambda: raw)
 
 
 class FakeSdkResolver(TriageResolver):
@@ -486,6 +498,22 @@ class TestTriageResolver(unittest.TestCase):
         self.assertEqual(outcome.status, "accepted", outcome.error)
         self.assertEqual(len(self.resolver.trigger_calls), 1)
 
+    def test_off_schema_existing_result_still_triggers_and_logs_the_body(self):
+        # A 200 with no triageStatus at all is not a real result - treat it
+        # like "nothing yet" (trigger normally) but log the raw body so the
+        # off-schema response is visible instead of silently swallowed.
+        self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus=None)
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(
+            {"detail": "placeholder"}
+        )
+        job = TriageJob(scan_id=SCAN_ID, scanner_type="sast", ticket_key="T-1", result_hash="hash-xyz")
+        with self.assertLogs("cxone_ai_triage", level="WARNING") as cm:
+            outcome = self.resolver.resolve_and_trigger(job)
+        self.assertEqual(outcome.status, "accepted", outcome.error)
+        self.assertIsNone(outcome.trigger_skipped_reason)
+        self.assertEqual(len(self.resolver.trigger_calls), 1)
+        self.assertTrue(any("placeholder" in line for line in cm.output))
+
     def test_mixed_batch_only_triggers_the_jobs_without_an_existing_result(self):
         self.resolver.existing_triage_by_group_id["123456"] = AiTriageResult(triageStatus="VULNERABLE")
         jobs = [
@@ -608,6 +636,42 @@ class TestPollAiTriageResult(unittest.TestCase):
                     PROJECT_ID, "group-1", timeout_seconds=2, interval_seconds=1
                 )
 
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_one_off_schema_round_is_tolerated_when_a_real_status_follows(self, mock_sleep):
+        # A placeholder body (no triageStatus) could in principle transition
+        # to a real status; a single off-schema round must not kill the poll.
+        responses = iter([
+            AiTriageResult(triageStatus=None),
+            AiTriageResult(triageStatus="VULNERABLE"),
+        ])
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response({})
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = lambda p, g: next(responses)
+        result = self.resolver.poll_ai_triage_result(
+            PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+        )
+        self.assertEqual(result.triageStatus, "VULNERABLE")
+        self.assertEqual(mock_sleep.call_count, 1)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_raises_missing_status_error_instead_of_timing_out_when_response_is_off_schema(self, mock_sleep):
+        # A live tenant's API returned 200 with a ~100-byte body that has no
+        # triageStatus at all (the field is required per the docs) for a
+        # trigger it accepted but never processed - identical on every poll.
+        # Polling the full timeout window against that is just a slow
+        # timeout; fail fast with the raw body in the error instead.
+        raw = {"detail": "placeholder"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus=None)
+        )
+        with self.assertRaises(AiTriageMissingStatusError) as cm:
+            self.resolver.poll_ai_triage_result(
+                PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+            )
+        self.assertIn("raw response body", str(cm.exception))
+        self.assertIn("placeholder", str(cm.exception))
+        self.assertEqual(mock_sleep.call_count, 1)  # one grace round, not the full window
+
 
 class TestPollAiTriageResults(unittest.TestCase):
     """poll_ai_triage_results - the batch method pipeline.py actually calls,
@@ -709,6 +773,31 @@ class TestPollAiTriageResults(unittest.TestCase):
         )
         self.assertIsInstance(results[0], RuntimeError)
         self.assertEqual(results[1].triageStatus, "VULNERABLE")
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_off_schema_target_fails_fast_while_others_keep_polling(self, mock_sleep):
+        # Same live-tenant scenario as the single-target test, but on the
+        # batch path pipeline.py uses: the stuck target errors out after 2
+        # rounds instead of dragging the whole poll to the timeout, and a
+        # healthy target in the same batch still resolves normally.
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(
+            {"detail": "placeholder"}
+        )
+
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-bad":
+                return AiTriageResult(triageStatus=None)
+            return AiTriageResult(triageStatus="VULNERABLE")
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        results = self.resolver.poll_ai_triage_results(
+            [(PROJECT_ID, "group-bad"), (PROJECT_ID, "group-1")],
+            timeout_seconds=60, interval_seconds=1,
+        )
+        self.assertIsInstance(results[0], AiTriageMissingStatusError)
+        self.assertIn("placeholder", str(results[0]))
+        self.assertEqual(results[1].triageStatus, "VULNERABLE")
+        self.assertEqual(mock_sleep.call_count, 1)
 
 
 class _FakeConfiguration:
