@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+- Polling a `TO_VERIFY` SCA target now probes `GET /api/risks` for the
+  settled state on every round (the pipeline passes each SCA target's CVE
+  ID to the poller via the new `sca_cve_ids` argument) and finishes the
+  poll immediately once the settled state appears, instead of waiting out
+  the full timeout window for the triage endpoint to settle — which for a
+  live tenant's SCA results it never did (the endpoint served `TO_VERIFY`
+  byte-identical every round while the UI already showed
+  `PROPOSED_NOT_EXPLOITABLE`). The deadline return-as-is behavior and the
+  pipeline's post-poll risk-state translation remain as backstops.
+
 ## [0.3.13]
 
 ### Fixed

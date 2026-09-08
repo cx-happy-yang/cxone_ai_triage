@@ -848,6 +848,37 @@ class TestPollAiTriageResult(unittest.TestCase):
         self.assertEqual(result.reachabilityStatus, "NOT_REACHABLE")
         self.assertEqual(result.exploitabilityStatus, "NOT_EXPLOITABLE")
 
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_sca_to_verify_finishes_immediately_when_risks_has_the_settled_state(self, mock_sleep):
+        # The poller probes GET /api/risks on TO_VERIFY rounds for SCA
+        # targets; the moment the risks view holds the settled state the
+        # poll finishes with it instead of waiting out the window.
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(),
+                risks=[
+                    Risk(
+                        id="r", engine="SCA", groupId="group-1",
+                        state="PROPOSED_NOT_EXPLOITABLE",
+                    )
+                ],
+            )
+        )
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(
+                triageStatus="TO_VERIFY",
+                reachabilityStatus="NOT_REACHABLE",
+                exploitabilityStatus="NOT_EXPLOITABLE",
+            )
+        )
+        result = self.resolver.poll_ai_triage_result(
+            PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1,
+            sca_cve_id="CVE-2021-21345",
+        )
+        self.assertEqual(result.triageStatus, "PROPOSED_NOT_EXPLOITABLE")
+        self.assertEqual(result.reachabilityStatus, "NOT_REACHABLE")  # analysis preserved
+        self.assertEqual(mock_sleep.call_count, 0)  # finished without waiting
+
     def test_raw_body_fetch_retries_once_after_a_transient_failure(self):
         # The API has been observed returning the job envelope on one GET
         # and 404 on the identical follow-up GET a moment later; the raw
@@ -1014,6 +1045,41 @@ class TestPollAiTriageResults(unittest.TestCase):
         self.assertIsInstance(results[0], AiTriageMissingStatusError)
         self.assertIn("placeholder", str(results[0]))
         self.assertEqual(results[1].triageStatus, "VULNERABLE")
+        self.assertEqual(mock_sleep.call_count, 1)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_sca_to_verify_target_finishes_via_risks_probe_while_others_keep_polling(self, mock_sleep):
+        # Same risks-probe behavior on the batch path: the SCA target
+        # finishes on round 1 with the settled state; the still-IN_PROGRESS
+        # target keeps polling to its TimeoutError.
+        raw = {"projectID": PROJECT_ID, "groupID": "group-ip", "jobStatus": "IN_PROGRESS"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(),
+                risks=[
+                    Risk(
+                        id="r", engine="SCA", groupId="group-tv",
+                        state="PROPOSED_NOT_EXPLOITABLE",
+                    )
+                ],
+            )
+        )
+
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-tv":
+                return AiTriageResult(triageStatus="TO_VERIFY")
+            return AiTriageResult(triageStatus=None)
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            results = self.resolver.poll_ai_triage_results(
+                [(PROJECT_ID, "group-tv"), (PROJECT_ID, "group-ip")],
+                timeout_seconds=2, interval_seconds=1,
+                sca_cve_ids=["CVE-2021-21345", None],
+            )
+        self.assertEqual(results[0].triageStatus, "PROPOSED_NOT_EXPLOITABLE")
+        self.assertIsInstance(results[1], TimeoutError)
         self.assertEqual(mock_sleep.call_count, 1)
 
     @patch("cxone_ai_triage.resolver.time.sleep")

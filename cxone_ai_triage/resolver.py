@@ -71,6 +71,7 @@ separate token fetch per class actually used in a run.
 import logging
 import time
 from collections import defaultdict
+from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -718,12 +719,42 @@ class TriageResolver:
         )
         return state
 
+    def _settled_result_via_risks(
+        self,
+        project_id: str,
+        group_id: str,
+        sca_cve_id: str,
+        result: AiTriageResult,
+    ) -> Optional[AiTriageResult]:
+        """When a polled result is still TO_VERIFY (analysis complete but
+        the verdict state not settled on the triage endpoint), check
+        GET /api/risks for the settled state. If it's there, return a copy
+        of the result with triageStatus replaced by the settled state;
+        otherwise return None (keep polling / keep the result as-is).
+
+        This finishes the poll in one round instead of burning the whole
+        timeout window once the settled state exists - a live tenant's SCA
+        triage stayed TO_VERIFY on the triage endpoint, byte-identical
+        every round, long after the risks view (what the UI shows) held
+        the settled PROPOSED_NOT_EXPLOITABLE.
+        """
+        settled = self.lookup_sca_risk_state(project_id, sca_cve_id, group_id)
+        if settled and settled != "TO_VERIFY":
+            logger.info(
+                "project %s group %s: AI Triage still TO_VERIFY but /api/risks has the "
+                "settled state %s; finishing with the settled state",
+                project_id, group_id, settled,
+            )
+            return replace(result, triageStatus=settled)
+        return None
+
     def poll_ai_triage_result(
         self,
         project_id: str,
         group_id: str,
         timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
         interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS,
+        sca_cve_id: Optional[str] = None,
     ) -> AiTriageResult:
         """Poll GET /api/ai-triage/triage/{projectId}/{groupId} until the
         analysis leaves NOT_TRIAGED/IN_PROGRESS, or raise TimeoutError.
@@ -748,10 +779,21 @@ class TriageResolver:
         the UI already showed PROPOSED_NOT_EXPLOITABLE. Returning it lets
         the run post the comment from the available data instead of
         posting nothing.
+
+        When sca_cve_id is given (SCA target), every TO_VERIFY round also
+        probes GET /api/risks for the settled state and finishes the poll
+        immediately once it's there (see _settled_result_via_risks),
+        instead of waiting out the rest of the window.
         """
         deadline = time.monotonic() + timeout_seconds
         result, raw_body = self._retrieve_triage_result(project_id, group_id)
         status = self._effective_triage_status(project_id, group_id, result, raw_body)
+        if status == "TO_VERIFY" and sca_cve_id:
+            settled_result = self._settled_result_via_risks(
+                project_id, group_id, sca_cve_id, result
+            )
+            if settled_result is not None:
+                return settled_result
         missing_status_rounds = 1 if status is None else 0
         logger.info(
             "project %s group %s: AI Triage status=%s (waiting up to %ds, checking every %ds)",
@@ -773,6 +815,12 @@ class TriageResolver:
             time.sleep(interval_seconds)
             result, raw_body = self._retrieve_triage_result(project_id, group_id)
             status = self._effective_triage_status(project_id, group_id, result, raw_body)
+            if status == "TO_VERIFY" and sca_cve_id:
+                settled_result = self._settled_result_via_risks(
+                    project_id, group_id, sca_cve_id, result
+                )
+                if settled_result is not None:
+                    return settled_result
             missing_status_rounds = missing_status_rounds + 1 if status is None else 0
             logger.info(
                 "project %s group %s: AI Triage status=%s", project_id, group_id, status,
@@ -786,6 +834,7 @@ class TriageResolver:
         targets: List[Tuple[str, str]],
         timeout_seconds: int = DEFAULT_POLL_TIMEOUT_SECONDS,
         interval_seconds: int = DEFAULT_POLL_INTERVAL_SECONDS,
+        sca_cve_ids: Optional[List[Optional[str]]] = None,
     ) -> List[object]:
         """Poll several (projectId, groupId) pairs together, one GET per
         still-pending target per round, sleeping once per round rather than
@@ -811,6 +860,11 @@ class TriageResolver:
         as-is (the analysis is complete; only the verdict's state change
         hasn't settled - see poll_ai_triage_result) instead of a
         TimeoutError.
+
+        sca_cve_ids, when given, is parallel to targets: a non-None entry
+        marks an SCA target, whose TO_VERIFY rounds additionally probe
+        GET /api/risks for the settled state and finish the moment it's
+        there (see _settled_result_via_risks).
 
         Returns a list the same length and order as `targets`; each entry
         is either the finished AiTriageResult or an Exception (a
@@ -846,6 +900,15 @@ class TriageResolver:
                 logger.info(
                     "project %s group %s: AI Triage status=%s", project_id, group_id, status,
                 )
+                if status == "TO_VERIFY" and sca_cve_ids and sca_cve_ids[i]:
+                    settled_result = self._settled_result_via_risks(
+                        project_id, group_id, sca_cve_ids[i], result
+                    )
+                    if settled_result is not None:
+                        results[i] = settled_result
+                        last_statuses[i] = settled_result.triageStatus
+                        pending.discard(i)
+                        continue
                 if status is None:
                     # Off-schema response: keep waiting in case a real
                     # status appears, but fail fast once the response has

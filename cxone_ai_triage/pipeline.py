@@ -95,10 +95,21 @@ def run_pipeline(
 
     unique_targets, poll_index_for = _dedupe_poll_targets(pollable)
 
+    # For SCA targets, tell the poller which CVE each target is so it can
+    # probe GET /api/risks for the settled state while the triage endpoint
+    # keeps serving TO_VERIFY (see resolver._settled_result_via_risks).
+    sca_cve_ids: List[Optional[str]] = [None] * len(unique_targets)
+    for (job, _), target_index in zip(pollable, poll_index_for):
+        if job.scanner_type == "sca" and job.cve_id:
+            sca_cve_ids[target_index] = job.cve_id
+
     poll_results = []
     if poll and unique_targets:
         poll_results = resolver.poll_ai_triage_results(
-            unique_targets, timeout_seconds=poll_timeout, interval_seconds=poll_interval,
+            unique_targets,
+            timeout_seconds=poll_timeout,
+            interval_seconds=poll_interval,
+            sca_cve_ids=sca_cve_ids,
         )
 
     triaged: List[TriagedJob] = []
