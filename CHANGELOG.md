@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.9]
+
 ### Fixed
 - A `GET /api/ai-triage/triage/{projectId}/{groupId}` response whose body
   has no `triageStatus` at all (off-schema — the field is required per the
