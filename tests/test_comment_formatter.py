@@ -22,6 +22,15 @@ class TestFormatComment(unittest.TestCase):
         self.assertIn("VULNERABLE", comment)
         self.assertNotIn("None", comment)
 
+    def test_triage_status_override_replaces_the_verdict_in_the_comment(self):
+        # The pipeline translates a transient TO_VERIFY into the settled
+        # risk state (GET /api/risks) before commenting; the override shows
+        # the settled state instead of result.triageStatus.
+        result = AiTriageResult(triageStatus="TO_VERIFY", reachabilityStatus="NOT_REACHABLE")
+        comment = format_comment(result, triage_status_override="PROPOSED_NOT_EXPLOITABLE")
+        self.assertIn("PROPOSED_NOT_EXPLOITABLE", comment)
+        self.assertNotIn("TO_VERIFY", comment)
+
     def test_fully_populated_result_includes_every_field(self):
         result = AiTriageResult(
             resultID="res-1",

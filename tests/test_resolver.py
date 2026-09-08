@@ -247,6 +247,58 @@ class TestTriageResolver(unittest.TestCase):
         outcome = self.resolver.resolve_and_trigger(job)
         self.assertEqual(outcome.group_id, "groupid-for-CVE-2021-44228")
 
+    def test_lookup_sca_risk_state_returns_the_state_of_the_risk_matching_the_group_id(self):
+        # The settled state comes from the risks view; the match must be on
+        # groupId so a different risk's state (same CVE, other package) is
+        # never borrowed.
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(),
+                risks=[
+                    Risk(id="r1", engine="SCA", groupId="other-group", state="CONFIRMED"),
+                    Risk(
+                        id="r2", engine="SCA",
+                        groupId="CVE-2021-21345#-#pkg#-#proj",
+                        state="PROPOSED_NOT_EXPLOITABLE", stateChangedBy="AI",
+                    ),
+                ],
+            )
+        )
+        state = self.resolver.lookup_sca_risk_state(
+            PROJECT_ID, "CVE-2021-21345", "CVE-2021-21345#-#pkg#-#proj"
+        )
+        self.assertEqual(state, "PROPOSED_NOT_EXPLOITABLE")
+
+    def test_lookup_sca_risk_state_returns_none_when_there_is_nothing_to_translate_from(self):
+        # No risks at all, none with this groupId, or the lookup itself
+        # fails: callers keep the triage result as-is.
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(), risks=[],
+            )
+        )
+        self.assertIsNone(
+            self.resolver.lookup_sca_risk_state(PROJECT_ID, "CVE-2021-21345", "group-1")
+        )
+
+        self.resolver._risks_api.get_risks = (
+            lambda project_id, engine=None, risk_name=None, limit=200, **kw: RisksResponse(
+                metaData=RisksMetaData(),
+                risks=[Risk(id="r1", engine="SCA", groupId="other", state="CONFIRMED")],
+            )
+        )
+        self.assertIsNone(
+            self.resolver.lookup_sca_risk_state(PROJECT_ID, "CVE-2021-21345", "group-1")
+        )
+
+        def broken(project_id, engine=None, risk_name=None, limit=200, **kw):
+            raise RuntimeError("503 Service Unavailable")
+
+        self.resolver._risks_api.get_risks = broken
+        self.assertIsNone(
+            self.resolver.lookup_sca_risk_state(PROJECT_ID, "CVE-2021-21345", "group-1")
+        )
+
     def test_multiple_risks_for_the_same_cve_are_disambiguated_by_package_identifier(self):
         # Same idea, but with two risks sharing this CVE (e.g. the package
         # appears in more than one module) and neither tagged with this
