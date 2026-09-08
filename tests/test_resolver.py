@@ -720,6 +720,60 @@ class TestPollAiTriageResult(unittest.TestCase):
         self.assertIn("placeholder", str(cm.exception))
         self.assertEqual(mock_sleep.call_count, 1)  # one grace round, not the full window
 
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_job_status_envelope_in_progress_keeps_polling_for_the_real_result(self, mock_sleep):
+        # A live tenant's endpoint returns {projectID, groupID, jobStatus:
+        # IN_PROGRESS} (no triageStatus) while the triage job is still
+        # processing. That must be treated as "in progress" - keep waiting
+        # for the real AiTriageResult - not as an off-schema failure.
+        responses = iter([
+            AiTriageResult(triageStatus=None),
+            AiTriageResult(triageStatus=None),
+            AiTriageResult(triageStatus="VULNERABLE"),
+        ])
+        raw = {"projectID": PROJECT_ID, "groupID": "group-1", "jobStatus": "IN_PROGRESS"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = lambda p, g: next(responses)
+        result = self.resolver.poll_ai_triage_result(
+            PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+        )
+        self.assertEqual(result.triageStatus, "VULNERABLE")
+        self.assertEqual(mock_sleep.call_count, 2)  # two IN_PROGRESS rounds, then the real result
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_job_status_envelope_that_never_finishes_times_out_like_in_progress(self, mock_sleep):
+        # Same envelope, but the job never completes within the window: the
+        # poll must run the full timeout (the job is genuinely running, not
+        # off-schema) and end in TimeoutError, not AiTriageMissingStatusError.
+        raw = {"projectID": PROJECT_ID, "groupID": "group-1", "jobStatus": "IN_PROGRESS"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus=None)
+        )
+        with patch("cxone_ai_triage.resolver.time.monotonic", side_effect=[0, 1, 2, 3, 4, 5]):
+            with self.assertRaises(TimeoutError) as cm:
+                self.resolver.poll_ai_triage_result(
+                    PROJECT_ID, "group-1", timeout_seconds=2, interval_seconds=1
+                )
+        self.assertIn("IN_PROGRESS", str(cm.exception))
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_job_status_envelope_with_a_non_in_progress_status_fails_fast(self, mock_sleep):
+        # An envelope whose jobStatus is not IN_PROGRESS (e.g. FAILED) will
+        # never turn into a result on its own - fail fast with the raw body
+        # instead of polling the whole timeout window.
+        raw = {"projectID": PROJECT_ID, "groupID": "group-1", "jobStatus": "FAILED"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = (
+            lambda p, g: AiTriageResult(triageStatus=None)
+        )
+        with self.assertRaises(AiTriageMissingStatusError) as cm:
+            self.resolver.poll_ai_triage_result(
+                PROJECT_ID, "group-1", timeout_seconds=60, interval_seconds=1
+            )
+        self.assertIn("FAILED", str(cm.exception))
+        self.assertEqual(mock_sleep.call_count, 1)
+
 
 class TestPollAiTriageResults(unittest.TestCase):
     """poll_ai_triage_results - the batch method pipeline.py actually calls,
@@ -844,6 +898,32 @@ class TestPollAiTriageResults(unittest.TestCase):
         )
         self.assertIsInstance(results[0], AiTriageMissingStatusError)
         self.assertIn("placeholder", str(results[0]))
+        self.assertEqual(results[1].triageStatus, "VULNERABLE")
+        self.assertEqual(mock_sleep.call_count, 1)
+
+    @patch("cxone_ai_triage.resolver.time.sleep")
+    def test_in_progress_job_envelope_target_keeps_polling_while_others_resolve(self, mock_sleep):
+        # Same job-status envelope as the single-target test, on the batch
+        # path: the enveloped target must keep polling (not fail fast)
+        # while a healthy target resolves on round 1.
+        raw = {"projectID": PROJECT_ID, "groupID": "group-env", "jobStatus": "IN_PROGRESS"}
+        self.resolver._ai_triage_api.api_client.call_api = _fake_raw_body_response(raw)
+        env_responses = iter([
+            AiTriageResult(triageStatus=None),
+            AiTriageResult(triageStatus="PROPOSED_NOT_EXPLOITABLE"),
+        ])
+
+        def fake_retrieve(project_id, group_id):
+            if group_id == "group-env":
+                return next(env_responses)
+            return AiTriageResult(triageStatus="VULNERABLE")
+
+        self.resolver._ai_triage_api.retrieve_ai_triage_results = fake_retrieve
+        results = self.resolver.poll_ai_triage_results(
+            [(PROJECT_ID, "group-env"), (PROJECT_ID, "group-1")],
+            timeout_seconds=60, interval_seconds=1,
+        )
+        self.assertEqual(results[0].triageStatus, "PROPOSED_NOT_EXPLOITABLE")
         self.assertEqual(results[1].triageStatus, "VULNERABLE")
         self.assertEqual(mock_sleep.call_count, 1)
 

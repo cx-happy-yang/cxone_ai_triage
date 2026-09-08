@@ -14,6 +14,18 @@
   value uses the `packageIdentifier` from the matched `/api/results` row;
   if that's also unavailable, `groupId` remains blank (trigger still fires,
   polling skipped) as before.
+- `poll_ai_triage_result` / `poll_ai_triage_results` now recognize the
+  job-status envelope the AI Triage endpoint actually returns while a
+  triage job is still processing — `{projectID, groupID, jobStatus:
+  IN_PROGRESS}`, ~100 bytes, no `triageStatus` (the documented
+  `AiTriageResult` schema simply isn't what the API serves for a running
+  job; the raw-body capture added in 0.3.9 decoded this from a live
+  tenant's log). `jobStatus: IN_PROGRESS` is treated exactly like
+  `triageStatus: IN_PROGRESS` (keep polling until the real result or the
+  timeout), instead of the 0.3.9 fail-fast wrongly giving up on a
+  legitimately-running job after 2 rounds; the fail-fast now applies only
+  to bodies with neither `triageStatus` nor the `IN_PROGRESS` envelope
+  (e.g. an envelope with `jobStatus: FAILED`).
 
 ## [0.3.9]
 

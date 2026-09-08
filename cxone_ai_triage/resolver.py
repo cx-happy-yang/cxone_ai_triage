@@ -98,26 +98,29 @@ RESULTS_PAGE_SIZE = 500
 # AiTriageResult docstring; anything else (including FAILED) is terminal.
 _IN_PROGRESS_TRIAGE_STATUSES = {"NOT_TRIAGED", "IN_PROGRESS"}
 
-# A 200 whose body has no triageStatus at all is off-schema (the field is
-# required per the API docs). Pollers tolerate it for this many consecutive
-# rounds in case a real status appears, then fail with
-# AiTriageMissingStatusError instead of burning the whole timeout window -
-# see _count_missing_status.
+# A 200 whose body has neither triageStatus nor the IN_PROGRESS job-status
+# envelope (see _effective_triage_status) is off-schema. Pollers tolerate
+# it for this many consecutive rounds in case a real status appears, then
+# fail with AiTriageMissingStatusError instead of burning the whole timeout
+# window.
 _MAX_MISSING_STATUS_ROUNDS = 2
 DEFAULT_POLL_TIMEOUT_SECONDS = 180
 DEFAULT_POLL_INTERVAL_SECONDS = 15
 
 
 class AiTriageMissingStatusError(RuntimeError):
-    """GET /api/ai-triage/triage returned 200 with no triageStatus at all.
+    """GET /api/ai-triage/triage returned 200 with no usable triage status.
 
-    The documented response schema requires triageStatus, so a body without
-    it is off-schema. Observed live as a ~100-byte placeholder for a trigger
-    the AI Triage service accepted (202, published=True) but never
-    processed - identical on every poll for minutes. Further polling will
-    not produce a verdict for it, so pollers fail fast with this error
-    (raw body included in the message for escalation) instead of burning
-    the whole timeout window.
+    The documented response schema requires triageStatus, but a live tenant
+    showed the endpoint returning a small job-status envelope instead while
+    a triage job is processing: {projectID, groupID, jobStatus:
+    IN_PROGRESS}. That envelope is handled as "still in progress" (see
+    _effective_triage_status); this error is raised only for bodies that
+    have neither triageStatus nor that IN_PROGRESS envelope - bodies the
+    pollers genuinely can't interpret. Further polling will not produce a
+    verdict from such a body, so pollers fail fast with the raw body in
+    the message (for escalation) instead of burning the whole timeout
+    window.
     """
 
     def __init__(self, project_id: str, group_id: str, raw_body):
@@ -591,12 +594,13 @@ class TriageResolver:
         The documented response schema requires triageStatus, so a parsed
         result without one means the API returned an off-schema body - the
         SDK's AiTriageResult.from_dict silently maps missing keys to None.
-        A live tenant showed exactly this: 200 with a ~100-byte placeholder
-        for a trigger the AI Triage service accepted (202, published=True)
-        but never processed, identical on every poll. The raw body is only
-        fetched when that happens (a normal response costs no extra
-        request), so the off-schema payload can be logged and reported
-        instead of being invisible.
+        A live tenant showed exactly this: 200 with a ~100-byte job-status
+        envelope ({projectID, groupID, jobStatus: IN_PROGRESS}) while the
+        triage job was still processing, identical on every poll until the
+        job finished. The raw body is only fetched when the parsed result
+        has no triageStatus (a normal response costs no extra request), so
+        the off-schema payload can be logged, interpreted (see
+        _effective_triage_status), and reported instead of being invisible.
         """
         result = self._ai_triage_api.retrieve_ai_triage_results(project_id, group_id)
         raw_body = None
@@ -616,25 +620,38 @@ class TriageResolver:
                 raw_body = None
         return result, raw_body
 
-    def _count_missing_status(
+    def _effective_triage_status(
         self,
         project_id: str,
         group_id: str,
         result: AiTriageResult,
         raw_body: Optional[dict],
-        previous_rounds: int,
-    ) -> int:
-        """Warn whenever a polled result has no triageStatus at all
-        (off-schema response) and return the number of consecutive rounds
-        that have now seen one; resets to 0 on any real status."""
-        if not result.triageStatus:
-            logger.warning(
-                "project %s group %s: AI Triage returned 200 with no triageStatus "
-                "(off-schema response, raw body: %r)",
-                project_id, group_id, raw_body,
-            )
-            return previous_rounds + 1
-        return 0
+    ) -> Optional[str]:
+        """Return the status that drives the poll loop for a polled response.
+
+        Normally that's AiTriageResult.triageStatus. But a live tenant
+        showed the endpoint returning a job-status envelope instead while
+        the triage job is still processing: {projectID, groupID,
+        jobStatus: IN_PROGRESS} (~100 bytes, no triageStatus field - the
+        documented schema simply isn't what the API serves for a running
+        job). jobStatus=IN_PROGRESS maps to the triageStatus IN_PROGRESS so
+        polling keeps waiting for the real result; any other envelope (e.g.
+        jobStatus=FAILED) and any body with neither field is off-schema: a
+        warning with the raw body is logged and None is returned so the
+        caller's missing-status counting can fail fast.
+        """
+        if result.triageStatus:
+            return result.triageStatus
+        if isinstance(raw_body, dict) and raw_body.get("jobStatus"):
+            job_status = raw_body["jobStatus"]
+            if job_status == "IN_PROGRESS":
+                return "IN_PROGRESS"
+        logger.warning(
+            "project %s group %s: AI Triage returned 200 with no triageStatus "
+            "(off-schema response, raw body: %r)",
+            project_id, group_id, raw_body,
+        )
+        return None
 
     def poll_ai_triage_result(
         self,
@@ -654,31 +671,30 @@ class TriageResolver:
         documented schema requires the field) is tolerated for one extra
         round in case a real status appears, then raises
         AiTriageMissingStatusError with the raw body instead of burning the
-        whole timeout window - observed live as a ~100-byte placeholder for
-        a trigger the AI Triage service accepted but never processed.
+        whole timeout window. Exception: the {projectID, groupID,
+        jobStatus: IN_PROGRESS} envelope the API returns while the triage
+        job is still running counts as IN_PROGRESS and keeps polling.
         """
         deadline = time.monotonic() + timeout_seconds
         result, raw_body = self._retrieve_triage_result(project_id, group_id)
-        missing_status_rounds = self._count_missing_status(
-            project_id, group_id, result, raw_body, 0
-        )
+        status = self._effective_triage_status(project_id, group_id, result, raw_body)
+        missing_status_rounds = 1 if status is None else 0
         logger.info(
             "project %s group %s: AI Triage status=%s (waiting up to %ds, checking every %ds)",
-            project_id, group_id, result.triageStatus, timeout_seconds, interval_seconds,
+            project_id, group_id, status, timeout_seconds, interval_seconds,
         )
-        while (result.triageStatus or "NOT_TRIAGED") in _IN_PROGRESS_TRIAGE_STATUSES:
+        while (status or "NOT_TRIAGED") in _IN_PROGRESS_TRIAGE_STATUSES:
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"AI Triage for project {project_id} group {group_id} did not "
-                    f"finish within {timeout_seconds}s (last status: {result.triageStatus!r})"
+                    f"finish within {timeout_seconds}s (last status: {status!r})"
                 )
             time.sleep(interval_seconds)
             result, raw_body = self._retrieve_triage_result(project_id, group_id)
-            missing_status_rounds = self._count_missing_status(
-                project_id, group_id, result, raw_body, missing_status_rounds
-            )
+            status = self._effective_triage_status(project_id, group_id, result, raw_body)
+            missing_status_rounds = missing_status_rounds + 1 if status is None else 0
             logger.info(
-                "project %s group %s: AI Triage status=%s", project_id, group_id, result.triageStatus,
+                "project %s group %s: AI Triage status=%s", project_id, group_id, status,
             )
             if missing_status_rounds >= _MAX_MISSING_STATUS_ROUNDS:
                 raise AiTriageMissingStatusError(project_id, group_id, raw_body)
@@ -704,7 +720,11 @@ class TriageResolver:
         all (off-schema - the documented schema requires the field) fails
         after _MAX_MISSING_STATUS_ROUNDS consecutive rounds with an
         AiTriageMissingStatusError carrying the raw body, rather than
-        dragging the batch to the full timeout - see _count_missing_status.
+        dragging the batch to the full timeout - see
+        _effective_triage_status. The job-status envelope ({projectID,
+        groupID, jobStatus: IN_PROGRESS}) the API serves while a triage
+        job is still running is the exception: it counts as IN_PROGRESS
+        and keeps polling.
 
         Returns a list the same length and order as `targets`; each entry
         is either the finished AiTriageResult or an Exception (a
@@ -718,6 +738,7 @@ class TriageResolver:
         results: List[Optional[AiTriageResult]] = [None] * n
         errors: List[Optional[Exception]] = [None] * n
         missing_status_rounds = [0] * n
+        last_statuses: List[Optional[str]] = [None] * n
         pending = set(range(n))
 
         def poll_round():
@@ -730,13 +751,16 @@ class TriageResolver:
                     pending.discard(i)
                     continue
                 results[i] = result
-                missing_status_rounds[i] = self._count_missing_status(
-                    project_id, group_id, result, raw_body, missing_status_rounds[i]
-                )
+                status = self._effective_triage_status(project_id, group_id, result, raw_body)
+                last_statuses[i] = status
+                if status is None:
+                    missing_status_rounds[i] += 1
+                else:
+                    missing_status_rounds[i] = 0
                 logger.info(
-                    "project %s group %s: AI Triage status=%s", project_id, group_id, result.triageStatus,
+                    "project %s group %s: AI Triage status=%s", project_id, group_id, status,
                 )
-                if not result.triageStatus:
+                if status is None:
                     # Off-schema response: keep waiting in case a real
                     # status appears, but fail fast once the response has
                     # been off-schema for enough consecutive rounds.
@@ -744,7 +768,7 @@ class TriageResolver:
                         errors[i] = AiTriageMissingStatusError(project_id, group_id, raw_body)
                         pending.discard(i)
                     continue
-                if result.triageStatus not in _IN_PROGRESS_TRIAGE_STATUSES:
+                if status not in _IN_PROGRESS_TRIAGE_STATUSES:
                     pending.discard(i)
 
         deadline = time.monotonic() + timeout_seconds
@@ -753,10 +777,9 @@ class TriageResolver:
             if time.monotonic() >= deadline:
                 for i in pending:
                     project_id, group_id = targets[i]
-                    last_status = results[i].triageStatus if results[i] else None
                     errors[i] = TimeoutError(
                         f"AI Triage for project {project_id} group {group_id} did not "
-                        f"finish within {timeout_seconds}s (last status: {last_status!r})"
+                        f"finish within {timeout_seconds}s (last status: {last_statuses[i]!r})"
                     )
                 break
             time.sleep(interval_seconds)
